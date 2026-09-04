@@ -122,6 +122,8 @@ export function classifyRecipeTags(recipe: TaggableRecipe): string[] {
   const original = (recipe.tags || []).map(canonicalizeTag).filter(Boolean);
   const tags = new Set(original);
   const title = arabicNormalize(recipe.title || "");
+  const titleAndTags = arabicNormalize([recipe.title, ...(recipe.tags || [])].filter(Boolean).join(" "));
+  const ingredientLines = (recipe.ingredients || []).map((item) => arabicNormalize(item));
   const fullText = arabicNormalize(
     [
       recipe.title,
@@ -141,7 +143,14 @@ export function classifyRecipeTags(recipe: TaggableRecipe): string[] {
     ["أسماك", /(?:^|\s)(?:سمك|اسماك|سلمون|تونه|بلطي|سردين)(?:\s|$)/],
     ["بيض", /(?:^|\s)(?:بيض|بيضه|بيضات)(?:\s|$)/],
   ];
-  for (const [tag, pattern] of proteinRules) if (has(fullText, pattern)) tags.add(tag);
+  const stockOnly = /(?:مرقه|شوربه|مكعب|نكهه|بودره)/;
+  for (const [tag, pattern] of proteinRules) {
+    const inTitleOrTags = has(titleAndTags, pattern);
+    const inRealIngredient = ingredientLines.some(
+      (line) => has(line, pattern) && !has(line, stockOnly)
+    );
+    if (inTitleOrTags || inRealIngredient) tags.add(tag);
+  }
 
   const dessert = has(title, /(?:كيك|كيكه|بسبوسه|كنافه|حلويات|حلي|حلوى|كوكيز|براونيز|مهلبيه|بودينج|تشيز كيك|ام علي)/);
   const soup = has(title, /(?:شوربه|حساء)/);
@@ -177,7 +186,7 @@ export function classifyRecipeTags(recipe: TaggableRecipe): string[] {
     ["آسيوي", /(?:اسيوي|صيني|ياباني|كوري|سوشي|نودلز|ترياكي)/],
     ["مكسيكي", /(?:مكسيكي|تاكو|بوريتو|كيساديا|ناتشوز)/],
   ];
-  for (const [tag, pattern] of cuisineRules) if (has(fullText, pattern)) tags.add(tag);
+  for (const [tag, pattern] of cuisineRules) if (has(titleAndTags, pattern)) tags.add(tag);
 
   if (recipe.time_minutes != null && recipe.time_minutes <= 30) tags.add("سريع");
   if (has(fullText, /(?:بدون فرن|من غير فرن)/)) tags.add("بدون فرن");

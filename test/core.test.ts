@@ -40,6 +40,17 @@ test("recipe tags do not guess a cuisine without a strong signal", () => {
   assert.ok(!tags.includes("خليجي"));
 });
 
+test("stock cubes do not turn a chicken recipe into a meat recipe", () => {
+  const tags = classifyRecipeTags({
+    title: "صينية دجاج بالخضار",
+    ingredients: ["1 دجاجة", "1 مكعب مرقة لحم"],
+    steps: ["توضع الصينية في الفرن"],
+    tags: [],
+  });
+  assert.ok(tags.includes("دجاج"));
+  assert.ok(!tags.includes("لحوم"));
+});
+
 test("quantity normalization handles Arabic digits, words, and dual nouns", () => {
   assert.equal(normalizeQuantity("٣ أكواب دقيق"), "3 أكواب دقيق");
   assert.equal(normalizeQuantity("نصف كوب حليب"), "½ كوب حليب");
