@@ -126,3 +126,31 @@ export async function triggerWorker(): Promise<void> {
     /* fire and forget */
   }
 }
+
+/**
+ * Give the newest failed import one immediate, one-time retry when the gallery
+ * is next opened. This repairs transient social-link failures without waiting
+ * for the nightly sweep and without re-enqueueing on every page view.
+ */
+export async function autoRetryLatestFailure(): Promise<void> {
+  const sb = supabaseAdmin();
+  const { data } = await sb
+    .from("recipes")
+    .select("id,source_url")
+    .eq("status", "fetch_failed")
+    .order("created_at", { ascending: false })
+    .limit(1);
+  const recipe = data?.[0];
+  const url = recipe?.source_url as string | undefined;
+  if (!recipe?.id || !url || !/^https?:\/\//.test(url)) return;
+
+  // The unique key makes concurrent gallery requests collapse to one retry.
+  const { error } = await sb.from("app_kv").insert({
+    key: `auto_retry_recipe_${recipe.id}`,
+    ts: new Date().toISOString(),
+  });
+  if (error) return;
+
+  await enqueueJob(url, null);
+  await triggerWorker();
+}

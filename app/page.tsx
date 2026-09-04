@@ -1,6 +1,7 @@
 import { supabasePublic } from "@/lib/supabase";
 import type { Recipe } from "@/lib/types";
 import GalleryClient from "./GalleryClient";
+import { autoRetryLatestFailure } from "@/lib/queue";
 
 export const revalidate = 0; // always fresh — new recipes show immediately
 
@@ -10,6 +11,10 @@ export default async function Home({
   searchParams: Promise<{ q?: string; tag?: string; collection?: string }>;
 }) {
   const { q = "", tag = "", collection = "" } = await searchParams;
+
+  // Do not make users wait for the nightly sweep after a transient import
+  // failure. The helper is idempotent and queues at most one retry per recipe.
+  await autoRetryLatestFailure().catch(() => {});
 
   const sb = supabasePublic();
   // Only the columns the gallery needs — skip heavy steps/raw/caption for speed.

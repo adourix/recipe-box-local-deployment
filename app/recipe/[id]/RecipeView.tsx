@@ -299,23 +299,19 @@ export default function RecipeView({
                 disabled={busy}
                 onClick={async () => {
                   setBusy(true);
-                  const res = await fetch("/api/web-save", {
+                  const res = await fetch(`/api/recipes/${r.id}/retry`, {
                     method: "POST",
-                    headers: {
-                      "content-type": "application/json",
-                      "x-edit-key": getEditKey(),
-                    },
-                    body: JSON.stringify({ url: r.source_url }),
-                  });
+                    headers: { "x-edit-key": getEditKey() },
+                  }).catch(() => null);
                   setBusy(false);
-                  if (res.ok) {
-                    router.refresh();
-                    toast("تمت إعادة الاستخراج.", "success");
+                  if (res?.ok) {
+                    toast("بدأت إعادة الاستخراج في الخلفية.", "success");
+                    setTimeout(() => router.refresh(), 12_000);
                   } else toast("تعذّرت إعادة المحاولة.", "error");
                 }}
               >
                 <Icon name="refresh" size={17} className={busy ? "spin" : ""} />{" "}
-                {busy ? "جاري الاستخراج..." : "إعادة الاستخراج"}
+                {busy ? "جاري الإرسال..." : "إعادة الاستخراج"}
               </button>
             )}
             {hasSource && (
