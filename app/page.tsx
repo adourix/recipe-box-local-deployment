@@ -2,6 +2,7 @@ import { supabasePublic } from "@/lib/supabase";
 import type { Recipe } from "@/lib/types";
 import GalleryClient from "./GalleryClient";
 import { autoRetryLatestFailure } from "@/lib/queue";
+import { classifyRecipeTags } from "@/lib/tags";
 
 export const revalidate = 0; // always fresh — new recipes show immediately
 
@@ -28,7 +29,10 @@ export default async function Home({
 
   return (
     <GalleryClient
-      recipes={(data as Recipe[]) || []}
+      recipes={((data as Recipe[]) || []).map((recipe) => ({
+        ...recipe,
+        tags: classifyRecipeTags(recipe),
+      }))}
       initialQuery={q}
       initialTag={tag}
       initialCollection={collection}

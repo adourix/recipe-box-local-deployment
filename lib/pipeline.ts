@@ -23,6 +23,7 @@ import { normalizeQuantity } from "./scale";
 import { arabicNormalize } from "./arabic";
 import { canonicalizeRecipeUrl, isDuplicateRecipe, type RecipeIdentity } from "./dedupe";
 import { fetchWithTimeout } from "./http";
+import { CANONICAL_TAGS, classifyRecipeTags } from "./tags";
 
 /** Search saved recipes by free text (Arabic-normalized token match). */
 export async function searchRecipes(
@@ -468,7 +469,10 @@ async function getKnownTags(sb: ReturnType<typeof supabaseAdmin>): Promise<strin
   const { data } = await sb.from("recipes").select("tags").limit(500);
   const count = new Map<string, number>();
   for (const r of data || []) for (const t of (r.tags as string[]) || []) count.set(t, (count.get(t) || 0) + 1);
-  return [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60).map(([t]) => t);
+  return [
+    ...CANONICAL_TAGS,
+    ...[...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([t]) => t),
+  ].filter((tag, index, all) => all.indexOf(tag) === index);
 }
 
 type StoredRecipeIdentity = RecipeIdentity & {
@@ -648,7 +652,14 @@ export async function saveFromUrl(url: string): Promise<SaveResult> {
     ingredients,
     ingredient_sections: sections.length ? sections : null,
     steps,
-    tags: extracted?.tags ?? [],
+    tags: classifyRecipeTags({
+      title,
+      caption: meta.caption,
+      ingredients,
+      steps,
+      tags: extracted?.tags ?? [],
+      time_minutes: extracted?.time_minutes,
+    }),
     servings: extracted?.servings ?? null,
     time_minutes: extracted?.time_minutes ?? null,
     nutrition: await ensureNutrition(extracted, title, ingredients),

@@ -55,11 +55,14 @@ export async function POST(req: NextRequest) {
           const job = await claimNextJob();
           if (!job) break;
           try {
+            console.info("[recipe-worker] started", { jobId: job.id, attempts: job.attempts });
             const r = await saveFromUrl(job.url);
             if (job.chat_id) await sendSaveResult(job.chat_id, r);
             await markJobDone(job.id);
+            console.info("[recipe-worker] finished", { jobId: job.id, recipeId: r.id, status: r.status });
           } catch (e) {
             await markJobError(job.id, String(e));
+            console.error("[recipe-worker] failed", { jobId: job.id, error: String(e) });
             if (job.chat_id) await sendMessage(job.chat_id, "⚠️ تعذّر حفظ أحد الروابط.");
           }
           await sleep(GAP_MS);

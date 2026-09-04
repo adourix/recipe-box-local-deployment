@@ -12,12 +12,24 @@ export interface Job {
   attempts: number;
 }
 
+export interface JobReceipt {
+  id: string;
+  status: string;
+  created_at: string;
+}
+
 // Longer than the slowest single job (~2min for a long reel), so the lease never
 // expires mid-job and lets a second worker in.
 const LEASE_MS = 180_000;
 
-export async function enqueueJob(url: string, chatId: number | null): Promise<void> {
-  await supabaseAdmin().from("jobs").insert({ url, chat_id: chatId });
+export async function enqueueJob(url: string, chatId: number | null): Promise<JobReceipt> {
+  const { data, error } = await supabaseAdmin()
+    .from("jobs")
+    .insert({ url, chat_id: chatId })
+    .select("id,status,created_at")
+    .single();
+  if (error || !data) throw new Error(error?.message || "job enqueue failed");
+  return data as JobReceipt;
 }
 
 export async function pendingCount(): Promise<number> {

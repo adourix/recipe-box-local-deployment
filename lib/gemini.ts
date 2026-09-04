@@ -1,5 +1,6 @@
 import type { ExtractedRecipe } from "./types";
 import { fetchWithTimeout } from "./http";
+import { CANONICAL_TAGS } from "./tags";
 
 const BASE = "https://generativelanguage.googleapis.com";
 // flash-lite has by far the highest free-tier daily quota (flash-latest points
@@ -16,7 +17,7 @@ const SCHEMA_HINT = `الحقول المطلوبة:
     { "title": string, "items": string[] }
   ],
   "steps": string[],           // خطوات التحضير مرتبة
-  "tags": string[],            // وسوم قصيرة بالعربية مثل: حلويات، سريع، دجاج، نباتي
+  "tags": string[],            // من 3 إلى 7 وسوم قصيرة تشمل نوع الطبق والبروتين والمطبخ عند وضوحه
   "servings": string | null,   // عدد الحصص إن ذُكر
   "time_minutes": number | null, // وقت التحضير بالدقائق إن أمكن تقديره
   "nutrition": {               // تقدير تقريبي للقيم الغذائية لكامل الوصفة (كل المقادير مجتمعة)، أو null
@@ -87,11 +88,12 @@ const RESPONSE_SCHEMA = {
 };
 
 function tagHint(knownTags?: string[]): string {
-  if (!knownTags || !knownTags.length) return "";
+  const choices = [...new Set([...CANONICAL_TAGS, ...(knownTags || [])])];
   return (
-    `\n\nمهم بخصوص الوسوم (tags): لديّ قائمة وسوم مستخدمة سابقًا. أعد استخدام الوسم المناسب منها حرفيًا ` +
-    `بدل إنشاء وسم جديد مرادف (مثال: استخدم "حلويات" ولا تكتب "حلى" أو "حلوى"). ` +
-    `لا تنشئ وسمًا جديدًا إلا إذا لم يوجد أي وسم مناسب في القائمة.\nالقائمة: ${knownTags.join("، ")}`
+    `\n\nمهم بخصوص الوسوم (tags): اختر من 3 إلى 7 وسوم دقيقة من القائمة التالية. ` +
+    `أضف نوع الطبق، والبروتين إن وُجد (مثل دجاج أو لحوم)، والمطبخ فقط عندما توجد دلالة واضحة ` +
+    `(مثل مصري أو شامي أو خليجي)، ثم طريقة أو مناسبة مفيدة. لا تخمّن المطبخ ولا تنشئ مرادفات جديدة. ` +
+    `يمكن إنشاء وسم جديد فقط إذا كانت المعلومة مهمة ولا يغطيها أي وسم في القائمة.\nالقائمة: ${choices.join("، ")}`
   );
 }
 

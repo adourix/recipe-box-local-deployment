@@ -98,11 +98,15 @@ export function HeaderMenu({ actions = [] }: { actions?: MenuAction[] }) {
                   className="menu-item"
                   disabled={!!busy}
                   onClick={() =>
-                    admin("/api/retag", "تنظيف الوسوم", (j) => `تم توحيد الوسوم (${j.tagsBefore}→${j.tagsAfter}).`)
+                    admin(
+                      "/api/retag",
+                      "تحديث التصنيفات",
+                      (j) => `تم تحديث تصنيفات ${j.recipesChanged} وصفة (${j.tagsBefore}→${j.tagsAfter} وسم).`
+                    )
                   }
                 >
-                  <Icon name="refresh" size={18} className={busy === "تنظيف الوسوم" ? "spin" : ""} />{" "}
-                  {busy === "تنظيف الوسوم" ? "جاري تنظيف الوسوم..." : "تنظيف الوسوم"}
+                  <Icon name="refresh" size={18} className={busy === "تحديث التصنيفات" ? "spin" : ""} />{" "}
+                  {busy === "تحديث التصنيفات" ? "جاري تحديث التصنيفات..." : "تحديث تصنيفات الوصفات"}
                 </button>
                 <button
                   className="menu-item"

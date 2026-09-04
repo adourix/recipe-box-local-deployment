@@ -4,10 +4,40 @@ import { arabicNormalize } from "../lib/arabic";
 import { canScale, normalizeQuantity, scaleIngredient, scaleInstruction } from "../lib/scale";
 import { canonicalizeRecipeUrl, isDuplicateRecipe } from "../lib/dedupe";
 import { facebookUrlFromLoginRedirect } from "../lib/pipeline";
+import { canonicalizeTag, classifyRecipeTags, tagGroupId } from "../lib/tags";
 
 test("Arabic search normalization removes marks and unifies variants", () => {
   assert.equal(arabicNormalize("  إِلى الحَلْوَىـ  "), "الي الحلوي");
   assert.equal(arabicNormalize("كُبَّة"), arabicNormalize("كبه"));
+});
+
+test("recipe tags normalize aliases and infer protein and cuisine from evidence", () => {
+  assert.equal(canonicalizeTag("فراخ"), "دجاج");
+  assert.equal(canonicalizeTag("لحمة"), "لحوم");
+  assert.equal(tagGroupId("دجاج"), "protein");
+  assert.deepEqual(
+    classifyRecipeTags({
+      title: "كبسة فراخ سريعة",
+      ingredients: ["1 دجاجة", "2 كوب أرز بسمتي"],
+      steps: ["تطهى المكونات في حلة واحدة"],
+      tags: ["فراخ"],
+      time_minutes: 25,
+    }),
+    ["أطباق رئيسية", "دجاج", "خليجي", "سريع", "قدر واحد"]
+  );
+});
+
+test("recipe tags do not guess a cuisine without a strong signal", () => {
+  const tags = classifyRecipeTags({
+    title: "شرائح اللحم بالمشروم",
+    ingredients: ["500 غ لحم بقري", "200 غ مشروم"],
+    steps: ["تشوح شرائح اللحم"],
+    tags: [],
+  });
+  assert.ok(tags.includes("لحوم"));
+  assert.ok(!tags.includes("مصري"));
+  assert.ok(!tags.includes("شامي"));
+  assert.ok(!tags.includes("خليجي"));
 });
 
 test("quantity normalization handles Arabic digits, words, and dual nouns", () => {

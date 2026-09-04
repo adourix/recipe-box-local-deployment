@@ -12,6 +12,7 @@ import { getEditKey, hasEditKey } from "@/lib/client";
 import { arabicNormalize } from "@/lib/arabic";
 import { isDuplicateRecipe } from "@/lib/dedupe";
 import { toast } from "./Toast";
+import { TAG_GROUPS, canonicalizeTag, tagGroupId } from "@/lib/tags";
 
 const PLATFORM_LABEL: Record<string, string> = {
   instagram: "انستغرام", facebook: "فيسبوك", tiktok: "تيك توك",
@@ -34,7 +35,7 @@ export default function GalleryClient({
 }) {
   const router = useRouter();
   const [q, setQ] = useState(initialQuery);
-  const [tags, setTags] = useState<string[]>(initialTag ? [initialTag] : []);
+  const [tags, setTags] = useState<string[]>(initialTag ? [canonicalizeTag(initialTag)] : []);
   const [platform, setPlatform] = useState("");
   const [status, setStatus] = useState("");
   const [collection, setCollection] = useState(initialCollection);
@@ -108,11 +109,27 @@ export default function GalleryClient({
     return [...s].sort((a, b) => a.localeCompare(b, "ar"));
   }, [recipes]);
 
-  const allTags = useMemo(() => {
+  const tagCounts = useMemo(() => {
     const count = new Map<string, number>();
     for (const r of recipes) for (const t of r.tags || []) count.set(t, (count.get(t) || 0) + 1);
-    return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+    return count;
   }, [recipes]);
+
+  const allTags = useMemo(
+    () => [...tagCounts.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag),
+    [tagCounts]
+  );
+
+  const groupedTags = useMemo(
+    () =>
+      TAG_GROUPS.map((group) => ({
+        ...group,
+        tags: group.tags.filter((tag) => tagCounts.has(tag)),
+      })).filter((group) => group.tags.length),
+    [tagCounts]
+  );
+
+  const otherTags = useMemo(() => allTags.filter((tag) => !tagGroupId(tag)), [allTags]);
 
   const platforms = useMemo(
     () => [...new Set(recipes.map((r) => r.platform).filter(Boolean))] as string[],
@@ -167,8 +184,14 @@ export default function GalleryClient({
 
   const visibleRecipes = filtered.slice(0, visibleCount);
 
-  const toggleTag = (t: string) =>
-    setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
+  const toggleTag = (tag: string) =>
+    setTags((current) => {
+      if (current.includes(tag)) return current.filter((item) => item !== tag);
+      const group = tagGroupId(tag);
+      return group
+        ? [...current.filter((item) => tagGroupId(item) !== group), tag]
+        : [...current, tag];
+    });
 
   const activeFilters =
     tags.length + (platform ? 1 : 0) + (status ? 1 : 0) + (q.trim() ? 1 : 0) +
@@ -229,7 +252,7 @@ export default function GalleryClient({
   };
 
   const reviewCount = recipes.filter((r) => r.status === "needs_review").length;
-  const visibleTags = showAllTags ? allTags : allTags.slice(0, 12);
+  const visibleOtherTags = showAllTags ? otherTags : otherTags.slice(0, 10);
 
   return (
     <div className="container">
@@ -354,16 +377,45 @@ export default function GalleryClient({
         </div>
 
         {allTags.length > 0 && (
-          <div className="tag-cloud">
-            {visibleTags.map((t) => (
-              <button key={t} className={`tag-pill ${tags.includes(t) ? "active" : ""}`} onClick={() => toggleTag(t)}>
-                {t}
-              </button>
+          <div className="tag-groups" aria-label="تصنيفات الوصفات">
+            {groupedTags.map((group) => (
+              <div className="tag-group" key={group.id}>
+                <span className="tag-group-label">{group.label}</span>
+                <div className="tag-cloud">
+                  {group.tags.map((tag) => (
+                    <button
+                      key={tag}
+                      className={`tag-pill ${tags.includes(tag) ? "active" : ""}`}
+                      onClick={() => toggleTag(tag)}
+                      aria-pressed={tags.includes(tag)}
+                    >
+                      {tag} <small>{tagCounts.get(tag)}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
-            {allTags.length > 12 && (
-              <button className="tag-pill more" onClick={() => setShowAllTags((s) => !s)}>
-                {showAllTags ? "أقل −" : `المزيد +${allTags.length - 12}`}
-              </button>
+            {otherTags.length > 0 && (
+              <div className="tag-group tag-group-other">
+                <span className="tag-group-label">وسوم أخرى</span>
+                <div className="tag-cloud">
+                  {visibleOtherTags.map((tag) => (
+                    <button
+                      key={tag}
+                      className={`tag-pill ${tags.includes(tag) ? "active" : ""}`}
+                      onClick={() => toggleTag(tag)}
+                      aria-pressed={tags.includes(tag)}
+                    >
+                      {tag} <small>{tagCounts.get(tag)}</small>
+                    </button>
+                  ))}
+                  {otherTags.length > 10 && (
+                    <button className="tag-pill more" onClick={() => setShowAllTags((show) => !show)}>
+                      {showAllTags ? "عرض أقل" : `المزيد +${otherTags.length - 10}`}
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         )}
