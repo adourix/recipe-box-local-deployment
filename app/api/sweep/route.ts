@@ -10,7 +10,7 @@ function authorized(req: NextRequest): boolean {
   return req.headers.get("x-edit-key") === process.env.EDIT_KEY;
 }
 
-// Daily self-heal: re-queue any needs_review recipes (transient failures fix themselves).
+// Daily self-heal: re-queue incomplete recipes (transient failures fix themselves).
 export async function GET(req: NextRequest) {
   if (!authorized(req)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   const { data } = await sb
     .from("recipes")
     .select("source_url")
-    .eq("status", "needs_review")
+    .in("status", ["needs_review", "fetch_failed"])
     .limit(30);
 
   let requeued = 0;

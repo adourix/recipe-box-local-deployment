@@ -80,6 +80,44 @@ const BROWSER_UA =
 const CRAWLER_UA =
   "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)";
 
+/**
+ * Facebook's short share links sometimes redirect server-side clients to the
+ * login page while preserving the real post URL in the `next` parameter.
+ * Recover that URL so the media resolver can work with the stable story link.
+ */
+export function facebookUrlFromLoginRedirect(redirectUrl: string): string | null {
+  try {
+    const redirect = new URL(redirectUrl);
+    if (!/(^|\.)facebook\.com$/i.test(redirect.hostname)) return null;
+    if (!/^\/login\/?$/i.test(redirect.pathname)) return null;
+    const next = redirect.searchParams.get("next");
+    if (!next) return null;
+    const target = new URL(next);
+    if (!/(^|\.)facebook\.com$/i.test(target.hostname)) return null;
+    target.searchParams.delete("mibextid");
+    target.searchParams.delete("rdid");
+    target.searchParams.delete("share_url");
+    return target.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function expandFacebookShareUrl(url: string): Promise<string> {
+  if (!/facebook\.com\/share\//i.test(url)) return url;
+  try {
+    const res = await fetchWithTimeout(
+      url,
+      { headers: { "User-Agent": BROWSER_UA }, redirect: "follow" },
+      15_000
+    );
+    return facebookUrlFromLoginRedirect(res.url) ||
+      (/(^|\.)facebook\.com$/i.test(new URL(res.url).hostname) ? res.url : url);
+  } catch {
+    return url;
+  }
+}
+
 /** Pull the first http(s) URL out of a message. */
 export function extractUrl(text: string): string | null {
   const m = text.match(/https?:\/\/[^\s]+/);
@@ -478,13 +516,15 @@ export interface SaveResult {
  */
 export async function saveFromUrl(url: string): Promise<SaveResult> {
   const sb = supabaseAdmin();
-  const platform = detectPlatform(url);
-  const sourceUrl = canonicalizeRecipeUrl(url);
+  const expandedUrl = await expandFacebookShareUrl(url);
+  const platform = detectPlatform(expandedUrl);
+  const originalSourceUrl = canonicalizeRecipeUrl(url);
+  const sourceUrl = canonicalizeRecipeUrl(expandedUrl);
 
   const { data: existingRows } = await sb
     .from("recipes")
     .select("id, image_url, status, title, ingredients, steps")
-    .in("source_url", [...new Set([url, sourceUrl])])
+    .in("source_url", [...new Set([url, originalSourceUrl, expandedUrl, sourceUrl])])
     .limit(1);
   const existing = existingRows?.[0] || null;
 
@@ -506,7 +546,7 @@ export async function saveFromUrl(url: string): Promise<SaveResult> {
 
   const id = existing?.id || randomUUID();
 
-  const meta = await fetchMeta(url);
+  const meta = await fetchMeta(expandedUrl);
   const cleaned = cleanSocialTitle(meta.title);
   if (cleaned.title) meta.title = cleaned.title;
   // Prefer the parsed account/page name over generic og:site_name ("Instagram").
@@ -516,7 +556,7 @@ export async function saveFromUrl(url: string): Promise<SaveResult> {
   // (and a clean title/thumbnail) from the public oEmbed endpoint instead.
   let ytAuthor: string | null = null;
   if (platform === "youtube") {
-    const oe = await youtubeOEmbed(url);
+    const oe = await youtubeOEmbed(expandedUrl);
     if (oe?.author) ytAuthor = oe.author;
     if (oe?.title) meta.title = oe.title;
     if (!meta.image && oe?.thumbnail) meta.image = oe.thumbnail;
@@ -544,14 +584,14 @@ export async function saveFromUrl(url: string): Promise<SaveResult> {
   // (YouTube uses oEmbed above + Gemini-native extraction, so skip the resolver.)
   let resolved: Resolved | null = null;
   if (VIDEO_PLATFORMS.has(platform) && platform !== "youtube") {
-    resolved = await resolveVideoUrl(url);
+    resolved = await resolveVideoUrl(expandedUrl);
   }
 
   let viaVideo = false;
   if (!captionHasRecipe && VIDEO_PLATFORMS.has(platform)) {
     let fromVideo: ExtractedRecipe | null = null;
     if (platform === "youtube") {
-      fromVideo = await extractRecipeFromYouTube(url, knownTags);
+      fromVideo = await extractRecipeFromYouTube(expandedUrl, knownTags);
     } else {
       fromVideo = await transcribeFromResolved(resolved, knownTags);
     }

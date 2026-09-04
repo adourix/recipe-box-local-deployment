@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { arabicNormalize } from "../lib/arabic";
 import { canScale, normalizeQuantity, scaleIngredient, scaleInstruction } from "../lib/scale";
 import { canonicalizeRecipeUrl, isDuplicateRecipe } from "../lib/dedupe";
+import { facebookUrlFromLoginRedirect } from "../lib/pipeline";
 
 test("Arabic search normalization removes marks and unifies variants", () => {
   assert.equal(arabicNormalize("  إِلى الحَلْوَىـ  "), "الي الحلوي");
@@ -94,6 +95,15 @@ test("recipe URL canonicalization removes share tracking and unifies variants", 
   assert.equal(
     canonicalizeRecipeUrl("https://youtu.be/xyz987?si=tracking"),
     canonicalizeRecipeUrl("https://www.youtube.com/watch?v=xyz987&utm_source=share")
+  );
+});
+
+test("Facebook login redirects expose the stable story URL", () => {
+  const story = "https://www.facebook.com/story.php?story_fbid=1807322734034308&id=100069013472103&mibextid=share&rdid=abc&share_url=https%3A%2F%2Ffacebook.com%2Fshare%2Fv%2Fshort";
+  const redirect = `https://www.facebook.com/login/?next=${encodeURIComponent(story)}`;
+  assert.equal(
+    facebookUrlFromLoginRedirect(redirect),
+    "https://www.facebook.com/story.php?story_fbid=1807322734034308&id=100069013472103"
   );
 });
 

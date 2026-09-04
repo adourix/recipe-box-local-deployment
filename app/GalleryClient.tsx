@@ -338,6 +338,7 @@ export default function GalleryClient({
             <option value="">كل الحالات</option>
             <option value="ok">مكتملة</option>
             <option value="needs_review">بحاجة لمراجعة{reviewCount ? ` (${reviewCount})` : ""}</option>
+            <option value="fetch_failed">تعذّر استخراجها</option>
           </select>
           <select aria-label="ترتيب الوصفات" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
             <option value="newest">الأحدث</option>
@@ -407,6 +408,7 @@ export default function GalleryClient({
                       )}
                       <div className="badges-top">
                         {r.status === "needs_review" && <span className="review-badge">بحاجة لمراجعة</span>}
+                        {r.status === "fetch_failed" && <span className="review-badge">تعذّر الاستخراج</span>}
                         {r.cooked && <span className="cooked-badge"><Icon name="check" size={12} /> طبختها</span>}
                         {duplicateRecipeIds.has(r.id) && <span className="dup-badge">مكرر؟</span>}
                       </div>
