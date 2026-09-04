@@ -51,6 +51,17 @@ test("stock cubes do not turn a chicken recipe into a meat recipe", () => {
   assert.ok(!tags.includes("لحوم"));
 });
 
+test("a chicken burger or burger cheese does not imply a meat recipe", () => {
+  const tags = classifyRecipeTags({
+    title: "برجر زنجر منزلي",
+    ingredients: ["2 قطعة صدور دجاج", "2 شريحة جبنة برجر"],
+    steps: ["يقلى الدجاج ثم يوضع في خبز البرجر"],
+    tags: [],
+  });
+  assert.ok(tags.includes("دجاج"));
+  assert.ok(!tags.includes("لحوم"));
+});
+
 test("quantity normalization handles Arabic digits, words, and dual nouns", () => {
   assert.equal(normalizeQuantity("٣ أكواب دقيق"), "3 أكواب دقيق");
   assert.equal(normalizeQuantity("نصف كوب حليب"), "½ كوب حليب");
