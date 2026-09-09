@@ -152,18 +152,18 @@ export function classifyRecipeTags(recipe: TaggableRecipe): string[] {
     if (inTitleOrTags || inRealIngredient) tags.add(tag);
   }
 
-  const dessert = has(title, /(?:كيك|كيكه|بسبوسه|كنافه|حلويات|حلي|حلوى|كوكيز|براونيز|مهلبيه|بودينج|تشيز كيك|ام علي)/);
+  const dessert = tags.has("حلويات") || has(title, /(?:كيك|كيكه|بسبوسه|كنافه|حلويات|حلي|حلوى|كوكيز|براونيز|مهلبيه|بودينج|تشيز كيك|ام علي|ايس كريم|سويس رول|سويسرول|تيراميسو)/);
   const soup = has(title, /(?:شوربه|حساء)/);
   const salad = has(title, /(?:سلطه|تبوله|فتوش)/);
   const drink = has(title, /(?:عصير|سموذي|مشروب|قهوه|شاي|ميلك شيك)/);
-  const sauce = has(title, /(?:صوص|صلصه|تتبيله|دريسنج|مايونيز)/);
+  const sauce = has(title, /^(?:صوص|صلصه|تتبيله|دريسنج|مايونيز)(?:\s|$)/);
   const breakfast = has(title, /(?:فطور|افطار|بان كيك|اومليت|شكشوكه|فول|طعمية)/);
   const sandwich = has(title, /(?:ساندوتش|سندوتش|برجر|شاورما|راب\b)/);
   const pastry = has(title, /(?:فطير|فطيره|بيتزا|مناقيش|سمبوسه|عجينه|كرواسون)/);
   const baked = has(title, /(?:خبز|عيش|توست|مخبوز)/);
   const appetizer = has(title, /(?:مقبلات|حمص|بابا غنوج|متبل|محمّره|محمرة)/);
 
-  if (dessert) tags.add("حلويات");
+  if (dessert) { tags.delete("أطباق رئيسية"); tags.add("حلويات"); }
   else if (soup) tags.add("شوربات");
   else if (salad) tags.add("سلطات");
   else if (drink) tags.add("مشروبات");
@@ -173,7 +173,7 @@ export function classifyRecipeTags(recipe: TaggableRecipe): string[] {
   else if (baked) tags.add("مخبوزات");
   else if (appetizer) tags.add("مقبلات");
   else if (breakfast) tags.add("فطور");
-  else if ((recipe.ingredients || []).length || (recipe.steps || []).length) tags.add("أطباق رئيسية");
+  else if (!original.some((tag) => tagGroupId(tag) === "dish") && ((recipe.ingredients || []).length || (recipe.steps || []).length)) tags.add("أطباق رئيسية");
 
   const cuisineRules: Array<[string, RegExp]> = [
     ["مصري", /(?:مصري|كشري|طعمية|حواوشي|بصاره|فسيخ|رقاق|ام علي)/],

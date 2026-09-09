@@ -50,6 +50,15 @@ export default function GalleryClient({
   const [addUrl, setAddUrl] = useState("");
   const [adding, setAdding] = useState(false);
   const photoRef = useRef<HTMLInputElement>(null);
+  const filterRef = useRef<HTMLDialogElement>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [filtersOpen]);
 
   const addByLink = async () => {
     const url = addUrl.trim();
@@ -77,6 +86,8 @@ export default function GalleryClient({
         toast("هذه الوصفة محفوظة مسبقًا — لم تتم إضافة نسخة أخرى.", "success");
         router.push(`/recipe/${result.id}`);
       } else toast("تعذّر حفظ الرابط.", "error");
+    } catch {
+      toast("انقطع الاتصال. الرابط محفوظ في الخانة، حاول مرة أخرى.", "error");
     } finally {
       setAdding(false);
     }
@@ -264,7 +275,7 @@ export default function GalleryClient({
           </div>
         </div>
       )}
-      <header className="topbar">
+      <header className="topbar gallery-header">
         <div className="brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.svg" alt="" className="brand-logo" width={40} height={40} />
@@ -274,8 +285,8 @@ export default function GalleryClient({
           </div>
         </div>
         <div className="header-actions">
-          <button className="btn-primary add-btn" onClick={() => setAddOpen((o) => !o)}>
-            <Icon name="plus" size={18} /> إضافة
+          <button className="btn-primary add-btn" aria-label="إضافة وصفة" aria-expanded={addOpen} onClick={() => setAddOpen((o) => !o)}>
+            <Icon name="plus" size={18} /><span className="add-label"> إضافة</span>
           </button>
           <CartLink />
           <HeaderMenu
@@ -329,6 +340,7 @@ export default function GalleryClient({
           <span className="search-icon"><Icon name="search" size={18} /></span>
           <input
             type="text" value={q} onChange={(e) => setQ(e.target.value)}
+            aria-label="البحث في الوصفات"
             placeholder="ابحث بالاسم، الوسم، أو المكوّن..." autoComplete="off"
           />
           {q && (
@@ -338,11 +350,28 @@ export default function GalleryClient({
           )}
         </div>
 
-        <div className="filters-row">
-          <button className={`chip-toggle ${onlyFav ? "active" : ""}`} onClick={() => setOnlyFav((f) => !f)}>
+        <div className="quick-filters filters-row">
+          <button className={`chip-toggle ${activeFilters ? "active" : ""}`} aria-haspopup="dialog" aria-expanded={filtersOpen} onClick={() => { filterRef.current?.showModal(); setFiltersOpen(true); }}>
+            <Icon name="filter" size={16} /> تصفية {activeFilters > 0 ? `(${activeFilters})` : ""}
+          </button>
+          <button aria-pressed={onlyFav} className={`chip-toggle ${onlyFav ? "active" : ""}`} onClick={() => setOnlyFav((f) => !f)}>
             <Icon name={onlyFav ? "heartFilled" : "heart"} size={16} /> المفضلة
           </button>
-          <button className={`chip-toggle ${onlyCooked ? "active" : ""}`} onClick={() => setOnlyCooked((c) => !c)}>
+          <select aria-label="ترتيب الوصفات" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
+            <option value="newest">الأحدث</option><option value="oldest">الأقدم</option>
+            <option value="fastest">الأسرع</option><option value="az">أبجدي</option>
+          </select>
+        </div>
+        {activeFilters > 0 && <div className="active-filter-summary">
+          <span>{[...tags, onlyFav && "المفضلة", onlyCooked && "طبختها", collection, platform && PLATFORM_LABEL[platform], status && (status === "ok" ? "مكتملة" : "غير مكتملة")].filter(Boolean).join(" · ") || "نتائج البحث"}</span>
+          <button className="link-btn" onClick={clearAll}>مسح الكل</button>
+        </div>}
+        <dialog className="filter-dialog" ref={filterRef} aria-labelledby="filters-title" onClose={() => setFiltersOpen(false)} onClick={(e) => { if (e.target === e.currentTarget) filterRef.current?.close(); }}>
+          <div className="filter-dialog-content">
+          <header className="filter-dialog-head"><div><h2 id="filters-title">تصفية الوصفات</h2><p>اختار تصنيفًا من كل مجموعة لتضييق النتائج</p></div><button className="icon-btn" aria-label="إغلاق التصفية" onClick={() => filterRef.current?.close()}><Icon name="x" /></button></header>
+          <div className="filter-dialog-scroll">
+          <div className="filters-row">
+          <button aria-pressed={onlyCooked} className={`chip-toggle ${onlyCooked ? "active" : ""}`} onClick={() => setOnlyCooked((c) => !c)}>
             <Icon name="check" size={16} /> طبختها
           </button>
           {collections.length > 0 && (
@@ -362,12 +391,6 @@ export default function GalleryClient({
             <option value="ok">مكتملة</option>
             <option value="needs_review">بحاجة لمراجعة{reviewCount ? ` (${reviewCount})` : ""}</option>
             <option value="fetch_failed">تعذّر استخراجها</option>
-          </select>
-          <select aria-label="ترتيب الوصفات" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
-            <option value="newest">الأحدث</option>
-            <option value="oldest">الأقدم</option>
-            <option value="fastest">الأسرع تحضيرًا</option>
-            <option value="az">أبجدي</option>
           </select>
           {activeFilters > 0 && (
             <button className="chip-toggle clear" onClick={clearAll}>
@@ -419,9 +442,13 @@ export default function GalleryClient({
             )}
           </div>
         )}
+          </div>
+          <footer className="filter-dialog-footer"><button className="btn-primary" onClick={() => filterRef.current?.close()}>عرض {filtered.length} وصفة</button><button className="btn-ghost" onClick={clearAll}>إعادة ضبط</button></footer>
+          </div>
+        </dialog>
       </div>
 
-      <div className="results-meta">{filtered.length} من {recipes.length} وصفة</div>
+      <div className="results-meta" role="status" aria-live="polite">{activeFilters ? `${filtered.length} من ${recipes.length} وصفة` : "وصفاتك المحفوظة"}</div>
 
       {filtered.length === 0 ? (
         <div className="empty">

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Icon } from "./Icon";
 import { toast } from "./Toast";
 import { getEditKey, setEditKey } from "@/lib/client";
@@ -15,11 +16,19 @@ export interface MenuAction {
 }
 
 export function HeaderMenu({ actions = [] }: { actions?: MenuAction[] }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [dark, setDark] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [busy, setBusy] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [open]);
 
   useEffect(() => {
     setUnlocked(getEditKey().length > 0);
@@ -48,7 +57,7 @@ export function HeaderMenu({ actions = [] }: { actions?: MenuAction[] }) {
       headers: { "x-edit-key": getEditKey() },
     }).catch(() => null);
     setBusy("");
-    if (res && res.ok) toast(done(await res.json()), "success");
+    if (res && res.ok) { toast(done(await res.json()), "success"); router.refresh(); }
     else toast(`تعذّر ${label}.`, "info");
   };
 
@@ -58,6 +67,7 @@ export function HeaderMenu({ actions = [] }: { actions?: MenuAction[] }) {
         className={`icon-btn ${open ? "on" : ""}`}
         onClick={() => setOpen((o) => !o)}
         aria-label="القائمة"
+        aria-expanded={open}
         title="القائمة"
       >
         <Icon name="menu" />
@@ -65,7 +75,7 @@ export function HeaderMenu({ actions = [] }: { actions?: MenuAction[] }) {
       {open && (
         <>
           <div className="menu-backdrop" onClick={() => setOpen(false)} />
-          <div className="menu-panel" role="menu">
+          <div className="menu-panel" aria-label="خيارات الموقع">
             {actions.map((a, i) =>
               a.href ? (
                 <Link key={i} href={a.href} className="menu-item" onClick={() => setOpen(false)}>

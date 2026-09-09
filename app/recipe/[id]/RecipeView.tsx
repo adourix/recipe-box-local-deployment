@@ -106,8 +106,14 @@ export default function RecipeView({
         headers: { "x-edit-key": getEditKey() },
         cache: "no-store",
       }).catch(() => null);
-      if (stopped || !res?.ok) return;
-      const next = (await res.json()) as RetryStatus;
+      if (stopped) return;
+      if (!res?.ok) {
+        if (res?.status !== 401 && res?.status !== 404) timer = setTimeout(poll, 5000);
+        return;
+      }
+      const next = await res.json().catch(() => null) as RetryStatus | null;
+      if (stopped) return;
+      if (!next) { timer = setTimeout(poll, 5000); return; }
       setRetryStatus(next);
       if (next.state === "queued" || next.state === "processing") {
         timer = setTimeout(poll, 3000);
@@ -208,7 +214,7 @@ export default function RecipeView({
     }
   };
 
-  const copyRecipe = () => {
+  const copyRecipe = async () => {
     const txt = [
       r.title,
       "",
@@ -219,9 +225,11 @@ export default function RecipeView({
       ...steps.map((x, i) => `${i + 1}. ${x}`),
       hasSource ? `\nالمصدر: ${r.source_url}` : "",
     ].join("\n");
-    navigator.clipboard.writeText(txt);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    try {
+      await navigator.clipboard.writeText(txt);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { toast("تعذّر نسخ الوصفة. حاول مرة أخرى.", "error"); }
   };
 
   return (
@@ -479,6 +487,7 @@ export default function RecipeView({
                   <button
                     key={o.value}
                     className={`scale-btn ${scale === o.value ? "active" : ""}`}
+                    aria-pressed={scale === o.value}
                     onClick={() => setScale(o.value)}
                   >
                     {o.label}
@@ -500,6 +509,8 @@ export default function RecipeView({
                               key={idx}
                               className={checked.includes(idx) ? "done" : ""}
                               onClick={() => toggleCheck(idx)}
+                              role="checkbox" aria-checked={checked.includes(idx)} tabIndex={0}
+                              onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleCheck(idx); } }}
                             >
                               <span className="tick">{checked.includes(idx) ? "✓" : ""}</span>
                               {scaleIngredient(ing, scale)}
@@ -517,6 +528,8 @@ export default function RecipeView({
                       key={i}
                       className={checked.includes(i) ? "done" : ""}
                       onClick={() => toggleCheck(i)}
+                      role="checkbox" aria-checked={checked.includes(i)} tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); toggleCheck(i); } }}
                     >
                       <span className="tick">{checked.includes(i) ? "✓" : ""}</span>
                       {scaleIngredient(ing, scale)}

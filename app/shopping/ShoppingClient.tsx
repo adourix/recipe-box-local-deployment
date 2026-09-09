@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { getShopping, setShopping, type ShopItem } from "@/lib/client";
 import { Icon } from "@/app/Icon";
+import { toast } from "@/app/Toast";
 
 export default function ShoppingClient() {
   const [items, setItems] = useState<ShopItem[]>([]);
@@ -20,7 +21,7 @@ export default function ShoppingClient() {
     update(items.map((it, idx) => (idx === i ? { ...it, checked: !it.checked } : it)));
   const remove = (i: number) => update(items.filter((_, idx) => idx !== i));
   const clearChecked = () => update(items.filter((it) => !it.checked));
-  const clearAll = () => update([]);
+  const clearAll = () => { if (confirm("مسح كل عناصر قائمة التسوق؟")) update([]); };
 
   const groups = useMemo(() => {
     const g = new Map<string, { title: string; entries: { it: ShopItem; i: number }[] }>();
@@ -34,9 +35,12 @@ export default function ShoppingClient() {
 
   const doneCount = items.filter((i) => i.checked).length;
 
-  const copyList = () => {
+  const copyList = async () => {
     const txt = items.map((i) => `${i.checked ? "✓" : "•"} ${i.text}`).join("\n");
-    navigator.clipboard.writeText("قائمة التسوق:\n" + txt);
+    try {
+      await navigator.clipboard.writeText("قائمة التسوق:\n" + txt);
+      toast("تم نسخ قائمة التسوق.", "success");
+    } catch { toast("تعذّر النسخ. حاول مرة أخرى.", "error"); }
   };
 
   return (
@@ -83,13 +87,15 @@ export default function ShoppingClient() {
               <ul className="ingredients">
                 {g.entries.map(({ it, i }) => (
                   <li key={i} className={it.checked ? "done" : ""}>
-                    <span className="tick" onClick={() => toggle(i)}>
+                    <button className="shop-check" role="checkbox" aria-checked={it.checked} onClick={() => toggle(i)}>
+                    <span className="tick" aria-hidden="true">
                       {it.checked ? "✓" : ""}
                     </span>
-                    <span style={{ flex: 1 }} onClick={() => toggle(i)}>
+                    <span style={{ flex: 1 }}>
                       {it.text}
                     </span>
-                    <button className="mini-x" onClick={() => remove(i)} aria-label="حذف">
+                    </button>
+                    <button className="mini-x" onClick={() => remove(i)} aria-label={`حذف ${it.text}`}>
                       <Icon name="x" size={14} />
                     </button>
                   </li>

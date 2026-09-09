@@ -40,6 +40,13 @@ test("recipe tags do not guess a cuisine without a strong signal", () => {
   assert.ok(!tags.includes("خليجي"));
 });
 
+test("desserts are not given the fallback main-dish category", () => {
+  const tags = classifyRecipeTags({ title: "آيس كريم الفواكه", tags: ["حلويات", "أطباق رئيسية"], ingredients: ["2 موزة"] });
+  assert.ok(tags.includes("حلويات"));
+  assert.ok(!tags.includes("أطباق رئيسية"));
+  assert.ok(!classifyRecipeTags({title: "دجاج بصوص المشروم", ingredients: ["500 غ دجاج"]}).includes("صلصات"));
+});
+
 test("stock cubes do not turn a chicken recipe into a meat recipe", () => {
   const tags = classifyRecipeTags({
     title: "صينية دجاج بالخضار",
