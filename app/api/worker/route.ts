@@ -16,14 +16,15 @@ import {
 } from "@/lib/queue";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 // Spacing between jobs keeps us under Gemini's per-minute limit. Keep the budget
-// low enough that even a worst-case (~40s) job finishes before maxDuration (60s),
-// so the function never gets hard-killed while holding the lock. It re-triggers
-// itself to drain the rest.
+// low enough that even a worst-case job (a 3-minute reel: download + Files API
+// upload + transcription runs ~60s) finishes before maxDuration, so the function
+// never gets hard-killed while holding the lock. It re-triggers itself to drain
+// the rest.
 const GAP_MS = 2500;
-const BUDGET_MS = 15_000;
+const BUDGET_MS = 60_000;
 
 function workerSecret(): string {
   return process.env.WORKER_SECRET || process.env.TELEGRAM_WEBHOOK_SECRET || "";
@@ -54,11 +55,14 @@ export async function POST(req: NextRequest) {
           const job = await claimNextJob();
           if (!job) break;
           try {
+            console.info("[recipe-worker] started", { jobId: job.id, attempts: job.attempts });
             const r = await saveFromUrl(job.url);
             if (job.chat_id) await sendSaveResult(job.chat_id, r);
             await markJobDone(job.id);
+            console.info("[recipe-worker] finished", { jobId: job.id, recipeId: r.id, status: r.status });
           } catch (e) {
             await markJobError(job.id, String(e));
+            console.error("[recipe-worker] failed", { jobId: job.id, error: String(e) });
             if (job.chat_id) await sendMessage(job.chat_id, "⚠️ تعذّر حفظ أحد الروابط.");
           }
           await sleep(GAP_MS);

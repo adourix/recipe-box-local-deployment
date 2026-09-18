@@ -2,6 +2,7 @@ import * as React from "react";
 
 // Minimal Lucide-style stroke icons (MIT). currentColor + consistent 24 grid.
 const PATHS: Record<string, React.ReactNode> = {
+  filter: <><path d="M4 7h16M4 17h16" /><circle cx="9" cy="7" r="3" fill="currentColor" /><circle cx="15" cy="17" r="3" fill="currentColor" /></>,
   search: (
     <>
       <circle cx="11" cy="11" r="8" />

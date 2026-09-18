@@ -4,7 +4,7 @@
 
 All 19 numbered findings from the original audit have been addressed in the local implementation. The requested introduction has been removed. The original warm terracotta/cream colors, warm dark theme, and Tajawal typography are preserved; filled controls were darkened where needed for readable contrast.
 
-The updated production preview runs at http://127.0.0.1:3001/. Nothing was deployed or pushed.
+The updated production preview runs at http://127.0.0.1:3001/. Deployment authorized by the owner; final deployment verification is recorded in the task.
 
 ## Resolution register
 
@@ -34,7 +34,7 @@ Settings no longer exposes tag-cleanup or ingredient-regroup maintenance actions
 
 ## Verification
 
-- Production build passed, including TypeScript validation. All 16 unit/regression tests passed.
+- Production build passed, including TypeScript validation. All 22 unit/regression tests passed after merging current origin/main.
 - Real backend checks passed using disposable fixtures: access rejection/acceptance, title/favorite/rating/cooked updates, private notes, incomplete-save rejection, combined photo/form save, export, nutrition estimation without persistence, and deletion.
 - Real URL and image imports passed; duplicate URL recovery returned the existing recipe. Fixture records, temporary source files, and uploaded test images were removed.
 - Browser failure simulations verified notes clearing on lock, preserved editor drafts and usable Cancel after failed PATCH, scaled copy, quantity replacement, and committed cross-tab shopping checks.
@@ -58,3 +58,7 @@ Settings no longer exposes tag-cleanup or ingredient-regroup maintenance actions
 ## Verification boundaries
 
 Physical iOS/Android installed-app share flows, Safari/WebKit, hardware printing, every external social platform, and a production deployment were not tested in this pass. Network cancellation stops waiting; a server import already underway can still finish. Offline mode provides a recovery screen rather than a fully offline recipe reader. Photos staged in memory survive in-app navigation, while reload protection warns before that file would be lost. Recommendation ranking, automatic legacy-tag backfills, image delivery benchmarking, and an explicit follow-system theme remain optional enhancements, not verified fixes in this audit.
+
+## Final integration
+
+Preserved upstream taxonomy, compact filter dialog, and server-backed retry progress. Restored Tajawal 400/500/700 with swap loading and original rounded checkboxes using the site accent. Added selected-image preview, elapsed time, counterclockwise refresh animation, and immediate stop-waiting feedback. Mobile browser verification passed for preview, timer, cancellation, dialog Escape behavior, overflow, and axe scanning.

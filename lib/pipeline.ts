@@ -23,6 +23,7 @@ import { normalizeQuantity } from "./scale";
 import { arabicNormalize } from "./arabic";
 import { canonicalizeRecipeUrl, isDuplicateRecipe, type RecipeIdentity } from "./dedupe";
 import { fetchWithTimeout } from "./http";
+import { CANONICAL_TAGS, classifyRecipeTags } from "./tags";
 
 /** Search saved recipes by free text (Arabic-normalized token match). */
 export async function searchRecipes(
@@ -79,6 +80,44 @@ const BROWSER_UA =
 // key that unlocks reel/post previews server-side.
 const CRAWLER_UA =
   "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)";
+
+/**
+ * Facebook's short share links sometimes redirect server-side clients to the
+ * login page while preserving the real post URL in the `next` parameter.
+ * Recover that URL so the media resolver can work with the stable story link.
+ */
+export function facebookUrlFromLoginRedirect(redirectUrl: string): string | null {
+  try {
+    const redirect = new URL(redirectUrl);
+    if (!/(^|\.)facebook\.com$/i.test(redirect.hostname)) return null;
+    if (!/^\/login\/?$/i.test(redirect.pathname)) return null;
+    const next = redirect.searchParams.get("next");
+    if (!next) return null;
+    const target = new URL(next);
+    if (!/(^|\.)facebook\.com$/i.test(target.hostname)) return null;
+    target.searchParams.delete("mibextid");
+    target.searchParams.delete("rdid");
+    target.searchParams.delete("share_url");
+    return target.toString();
+  } catch {
+    return null;
+  }
+}
+
+async function expandFacebookShareUrl(url: string): Promise<string> {
+  if (!/facebook\.com\/share\//i.test(url)) return url;
+  try {
+    const res = await fetchWithTimeout(
+      url,
+      { headers: { "User-Agent": BROWSER_UA }, redirect: "follow" },
+      15_000
+    );
+    return facebookUrlFromLoginRedirect(res.url) ||
+      (/(^|\.)facebook\.com$/i.test(new URL(res.url).hostname) ? res.url : url);
+  } catch {
+    return url;
+  }
+}
 
 /** Pull the first http(s) URL out of a message. */
 export function extractUrl(text: string): string | null {
@@ -150,8 +189,22 @@ async function maybeAlertIgCookies(): Promise<void> {
   }
 }
 
-/** Ask the resolver microservice to turn a page URL into direct media URLs. */
-export async function resolveVideoUrl(pageUrl: string): Promise<Resolved | null> {
+/**
+ * Ask the resolver microservice to turn a page URL into direct media URLs.
+ * yt-dlp fails to parse Facebook pages maybe a third of the time (FB serves
+ * varying markup), and it fails fast — so just try again before giving up.
+ */
+export async function resolveVideoUrl(pageUrl: string, tries = 3): Promise<Resolved | null> {
+  for (let i = 0; i < tries; i++) {
+    const r = await resolveOnce(pageUrl);
+    if (r) return r;
+    if (i < tries - 1) await new Promise((res) => setTimeout(res, 1500));
+  }
+  if (/instagram\.com/i.test(pageUrl)) await maybeAlertIgCookies();
+  return null;
+}
+
+async function resolveOnce(pageUrl: string): Promise<Resolved | null> {
   const endpoint = process.env.RESOLVER_URL;
   if (!endpoint) return null;
   try {
@@ -164,15 +217,10 @@ export async function resolveVideoUrl(pageUrl: string): Promise<Resolved | null>
       body: JSON.stringify({ url: pageUrl }),
     }, 25_000);
     const j = await res.json().catch(() => null);
-    if (!res.ok) {
+    if (!res.ok || (!j?.video_url && !j?.audio_url)) {
+      // IG failing to resolve almost always means the cookies expired — the
+      // caller alerts once all retries are spent.
       if (j?.error) console.error("resolver error", j.error);
-      if (/instagram\.com/i.test(pageUrl)) await maybeAlertIgCookies();
-      return null;
-    }
-    if (!j?.video_url && !j?.audio_url) {
-      if (j?.error) console.error("resolver error", j.error);
-      // IG failing to resolve almost always means the cookies expired.
-      if (/instagram\.com/i.test(pageUrl)) await maybeAlertIgCookies();
       return null;
     }
     return j;
@@ -421,7 +469,10 @@ async function getKnownTags(sb: ReturnType<typeof supabaseAdmin>): Promise<strin
   const { data } = await sb.from("recipes").select("tags").limit(500);
   const count = new Map<string, number>();
   for (const r of data || []) for (const t of (r.tags as string[]) || []) count.set(t, (count.get(t) || 0) + 1);
-  return [...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 60).map(([t]) => t);
+  return [
+    ...CANONICAL_TAGS,
+    ...[...count.entries()].sort((a, b) => b[1] - a[1]).slice(0, 40).map(([t]) => t),
+  ].filter((tag, index, all) => all.indexOf(tag) === index);
 }
 
 type StoredRecipeIdentity = RecipeIdentity & {
@@ -469,13 +520,15 @@ export interface SaveResult {
  */
 export async function saveFromUrl(url: string): Promise<SaveResult> {
   const sb = supabaseAdmin();
-  const platform = detectPlatform(url);
-  const sourceUrl = canonicalizeRecipeUrl(url);
+  const expandedUrl = await expandFacebookShareUrl(url);
+  const platform = detectPlatform(expandedUrl);
+  const originalSourceUrl = canonicalizeRecipeUrl(url);
+  const sourceUrl = canonicalizeRecipeUrl(expandedUrl);
 
   const { data: existingRows } = await sb
     .from("recipes")
     .select("id, image_url, status, title, ingredients, steps")
-    .in("source_url", [...new Set([url, sourceUrl])])
+    .in("source_url", [...new Set([url, originalSourceUrl, expandedUrl, sourceUrl])])
     .limit(1);
   const existing = existingRows?.[0] || null;
 
@@ -497,7 +550,7 @@ export async function saveFromUrl(url: string): Promise<SaveResult> {
 
   const id = existing?.id || randomUUID();
 
-  const meta = await fetchMeta(url);
+  const meta = await fetchMeta(expandedUrl);
   const cleaned = cleanSocialTitle(meta.title);
   if (cleaned.title) meta.title = cleaned.title;
   // Prefer the parsed account/page name over generic og:site_name ("Instagram").
@@ -507,7 +560,7 @@ export async function saveFromUrl(url: string): Promise<SaveResult> {
   // (and a clean title/thumbnail) from the public oEmbed endpoint instead.
   let ytAuthor: string | null = null;
   if (platform === "youtube") {
-    const oe = await youtubeOEmbed(url);
+    const oe = await youtubeOEmbed(expandedUrl);
     if (oe?.author) ytAuthor = oe.author;
     if (oe?.title) meta.title = oe.title;
     if (!meta.image && oe?.thumbnail) meta.image = oe.thumbnail;
@@ -535,14 +588,14 @@ export async function saveFromUrl(url: string): Promise<SaveResult> {
   // (YouTube uses oEmbed above + Gemini-native extraction, so skip the resolver.)
   let resolved: Resolved | null = null;
   if (VIDEO_PLATFORMS.has(platform) && platform !== "youtube") {
-    resolved = await resolveVideoUrl(url);
+    resolved = await resolveVideoUrl(expandedUrl);
   }
 
   let viaVideo = false;
   if (!captionHasRecipe && VIDEO_PLATFORMS.has(platform)) {
     let fromVideo: ExtractedRecipe | null = null;
     if (platform === "youtube") {
-      fromVideo = await extractRecipeFromYouTube(url, knownTags);
+      fromVideo = await extractRecipeFromYouTube(expandedUrl, knownTags);
     } else {
       fromVideo = await transcribeFromResolved(resolved, knownTags);
     }
@@ -599,7 +652,14 @@ export async function saveFromUrl(url: string): Promise<SaveResult> {
     ingredients,
     ingredient_sections: sections.length ? sections : null,
     steps,
-    tags: extracted?.tags ?? [],
+    tags: classifyRecipeTags({
+      title,
+      caption: meta.caption,
+      ingredients,
+      steps,
+      tags: extracted?.tags ?? [],
+      time_minutes: extracted?.time_minutes,
+    }),
     servings: extracted?.servings ?? null,
     time_minutes: extracted?.time_minutes ?? null,
     nutrition: await ensureNutrition(extracted, title, ingredients),

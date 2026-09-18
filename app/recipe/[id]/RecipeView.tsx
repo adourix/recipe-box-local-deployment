@@ -29,6 +29,17 @@ const PLATFORM_LABEL: Record<string, string> = {
   other: "المصدر",
 };
 
+type RetryState = "idle" | "queued" | "processing" | "success" | "review" | "failed";
+
+interface RetryStatus {
+  state: RetryState;
+  title: string;
+  detail: string;
+  jobId: string | null;
+  createdAt: string | null;
+  attempts: number;
+}
+
 function nutritionValue(value: number | null | undefined, scale: number, unit = "") {
   if (value == null) return "—";
   const scaled = value * scale;
@@ -56,6 +67,9 @@ export default function RecipeView({
   const [notesSaved, setNotesSaved] = useState(false);
   const actionBusy = useRef(false);
   const noteDraft = useRef(false);
+  const [retryStarting, setRetryStarting] = useState(false);
+  const [retryStatus, setRetryStatus] = useState<RetryStatus | null>(null);
+  const retryRefreshRef = useRef(false);
   const [notesDirty, setNotesDirty] = useState(false);
   useDraftGuard(notesDirty);
 
@@ -90,6 +104,41 @@ export default function RecipeView({
   }, [recipe.id]);
 
   useEffect(() => { setR(current => ({...recipe, notes: current.notes})); }, [recipe]);
+
+  // Retry state lives on the server, so it survives refreshes and other tabs.
+  useEffect(() => {
+    if (!canEdit || r.status === "ok" || !/^https?:\/\//.test(r.source_url || "")) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      const res = await fetch(`/api/recipes/${r.id}/retry`, {
+        headers: { "x-edit-key": getEditKey() },
+        cache: "no-store",
+      }).catch(() => null);
+      if (stopped) return;
+      if (!res?.ok) {
+        if (res?.status !== 401 && res?.status !== 404) timer = setTimeout(poll, 5000);
+        return;
+      }
+      const next = await res.json().catch(() => null) as RetryStatus | null;
+      if (stopped) return;
+      if (!next) { timer = setTimeout(poll, 5000); return; }
+      setRetryStatus(next);
+      if (next.state === "queued" || next.state === "processing") {
+        timer = setTimeout(poll, 3000);
+      } else if (next.state === "success" && !retryRefreshRef.current) {
+        retryRefreshRef.current = true;
+        router.refresh();
+      }
+    };
+
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [canEdit, r.id, r.source_url, r.status, retryStatus?.jobId, router]);
 
   // Personal-field writer (favorite / rating / cooked / notes).
   const patch = async (fields: Record<string, unknown>): Promise<boolean> => {
@@ -134,6 +183,20 @@ export default function RecipeView({
   const ingredients = r.ingredients || [];
   const steps = r.steps || [];
   const hasSource = recipeSource(r.source_url);
+  const retryActive = retryStatus?.state === "queued" || retryStatus?.state === "processing";
+  const retryLevel = retryStatus?.state === "queued" ? 1 : retryStatus?.state === "processing" ? 2 : 3;
+  const startRetry = async () => {
+    if (retryStarting || retryActive) return;
+    setRetryStarting(true); retryRefreshRef.current = false;
+    try {
+      const payload = await requestJson<{ retry?: RetryStatus; already_complete?: boolean }>(`/api/recipes/${r.id}/retry`, {method: "POST"});
+      if (payload.retry) setRetryStatus(payload.retry);
+      else if (payload.already_complete) router.refresh();
+      else throw new Error("تعذّر بدء إعادة الاستخراج.");
+    } catch(e) { toast(requestMessage(e), "error"); }
+    finally { setRetryStarting(false); }
+  };
+
 
   const copyRecipe = async () => {
     try { await navigator.clipboard.writeText(recipeText(r, scale)); setCopied(true); setTimeout(() => setCopied(false), 1500); }
@@ -265,16 +328,15 @@ export default function RecipeView({
             {canEdit && r.status !== "ok" && hasSource && (
               <button
                 className="btn-ghost"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try { await requestJson("/api/web-save", jsonBody({url: hasSource}), 310000); router.refresh(); toast("تمت إعادة الاستخراج.", "success"); }
-                  catch(e) { if (e instanceof RequestError && e.status === 409) router.refresh(); else toast(requestMessage(e), "error"); }
-                  finally { setBusy(false); }
-                }}
+                disabled={retryStarting || retryActive}
+                onClick={startRetry}
               >
-                <Icon name="refresh" size={17} className={busy ? "spin" : ""} />{" "}
-                {busy ? "جاري الاستخراج..." : "إعادة الاستخراج"}
+                <Icon name="refresh" size={17} className={retryStarting || retryActive ? "spin" : ""} />{" "}
+                {retryStarting
+                  ? "جاري بدء المحاولة..."
+                  : retryActive
+                    ? "الاستخراج يعمل الآن"
+                    : "إعادة الاستخراج"}
               </button>
             )}
             {hasSource && (
@@ -283,6 +345,40 @@ export default function RecipeView({
               </a>
             )}
           </div>
+
+          {canEdit && r.status !== "ok" && retryStatus && retryStatus.state !== "idle" && (
+            <section
+              className={`retry-panel retry-${retryStatus.state}`}
+              role="status"
+              aria-live="polite"
+              aria-label="حالة إعادة الاستخراج"
+            >
+              <div className="retry-panel-head">
+                <span className="retry-status-icon">
+                  <Icon
+                    name={retryStatus.state === "success" ? "check" : retryStatus.state === "failed" ? "x" : "refresh"}
+                    size={18}
+                    className={retryActive ? "spin" : ""}
+                  />
+                </span>
+                <div>
+                  <strong>{retryStatus.title}</strong>
+                  <p>{retryStatus.detail}</p>
+                </div>
+              </div>
+              <ol className="retry-steps">
+                <li className={retryLevel >= 1 ? "done" : ""}><span>1</span> استلام الطلب</li>
+                <li className={retryLevel === 1 ? "active" : retryLevel > 1 ? "done" : ""}><span>2</span> انتظار الدور</li>
+                <li className={retryLevel === 2 ? "active" : retryLevel > 2 ? "done" : ""}><span>3</span> قراءة المصدر وتحليله</li>
+                <li className={retryLevel >= 3 ? (retryStatus.state === "success" ? "done" : "problem") : ""}><span>4</span> تحديث الوصفة</li>
+              </ol>
+              {retryStatus.createdAt && (
+                <small className="retry-time">
+                  بدأت المحاولة {new Date(retryStatus.createdAt).toLocaleString("ar-EG", { dateStyle: "medium", timeStyle: "short" })}
+                </small>
+              )}
+            </section>
+          )}
 
           {r.status !== "ok" && (
             <div className="note">

@@ -3,10 +3,70 @@ import assert from "node:assert/strict";
 import { arabicNormalize } from "../lib/arabic";
 import { canScale, normalizeQuantity, scaleIngredient, scaleInstruction } from "../lib/scale";
 import { canonicalizeRecipeUrl, isDuplicateRecipe } from "../lib/dedupe";
+import { facebookUrlFromLoginRedirect } from "../lib/pipeline";
+import { canonicalizeTag, classifyRecipeTags, tagGroupId } from "../lib/tags";
 
 test("Arabic search normalization removes marks and unifies variants", () => {
   assert.equal(arabicNormalize("  إِلى الحَلْوَىـ  "), "الي الحلوي");
   assert.equal(arabicNormalize("كُبَّة"), arabicNormalize("كبه"));
+});
+
+test("recipe tags normalize aliases and infer protein and cuisine from evidence", () => {
+  assert.equal(canonicalizeTag("فراخ"), "دجاج");
+  assert.equal(canonicalizeTag("لحمة"), "لحوم");
+  assert.equal(tagGroupId("دجاج"), "protein");
+  assert.deepEqual(
+    classifyRecipeTags({
+      title: "كبسة فراخ سريعة",
+      ingredients: ["1 دجاجة", "2 كوب أرز بسمتي"],
+      steps: ["تطهى المكونات في حلة واحدة"],
+      tags: ["فراخ"],
+      time_minutes: 25,
+    }),
+    ["أطباق رئيسية", "دجاج", "خليجي", "سريع", "قدر واحد"]
+  );
+});
+
+test("recipe tags do not guess a cuisine without a strong signal", () => {
+  const tags = classifyRecipeTags({
+    title: "شرائح اللحم بالمشروم",
+    ingredients: ["500 غ لحم بقري", "200 غ مشروم"],
+    steps: ["تشوح شرائح اللحم"],
+    tags: [],
+  });
+  assert.ok(tags.includes("لحوم"));
+  assert.ok(!tags.includes("مصري"));
+  assert.ok(!tags.includes("شامي"));
+  assert.ok(!tags.includes("خليجي"));
+});
+
+test("desserts are not given the fallback main-dish category", () => {
+  const tags = classifyRecipeTags({ title: "آيس كريم الفواكه", tags: ["حلويات", "أطباق رئيسية"], ingredients: ["2 موزة"] });
+  assert.ok(tags.includes("حلويات"));
+  assert.ok(!tags.includes("أطباق رئيسية"));
+  assert.ok(!classifyRecipeTags({title: "دجاج بصوص المشروم", ingredients: ["500 غ دجاج"]}).includes("صلصات"));
+});
+
+test("stock cubes do not turn a chicken recipe into a meat recipe", () => {
+  const tags = classifyRecipeTags({
+    title: "صينية دجاج بالخضار",
+    ingredients: ["1 دجاجة", "1 مكعب مرقة لحم"],
+    steps: ["توضع الصينية في الفرن"],
+    tags: [],
+  });
+  assert.ok(tags.includes("دجاج"));
+  assert.ok(!tags.includes("لحوم"));
+});
+
+test("a chicken burger or burger cheese does not imply a meat recipe", () => {
+  const tags = classifyRecipeTags({
+    title: "برجر زنجر منزلي",
+    ingredients: ["2 قطعة صدور دجاج", "2 شريحة جبنة برجر"],
+    steps: ["يقلى الدجاج ثم يوضع في خبز البرجر"],
+    tags: [],
+  });
+  assert.ok(tags.includes("دجاج"));
+  assert.ok(!tags.includes("لحوم"));
 });
 
 test("quantity normalization handles Arabic digits, words, and dual nouns", () => {
@@ -94,6 +154,15 @@ test("recipe URL canonicalization removes share tracking and unifies variants", 
   assert.equal(
     canonicalizeRecipeUrl("https://youtu.be/xyz987?si=tracking"),
     canonicalizeRecipeUrl("https://www.youtube.com/watch?v=xyz987&utm_source=share")
+  );
+});
+
+test("Facebook login redirects expose the stable story URL", () => {
+  const story = "https://www.facebook.com/story.php?story_fbid=1807322734034308&id=100069013472103&mibextid=share&rdid=abc&share_url=https%3A%2F%2Ffacebook.com%2Fshare%2Fv%2Fshort";
+  const redirect = `https://www.facebook.com/login/?next=${encodeURIComponent(story)}`;
+  assert.equal(
+    facebookUrlFromLoginRedirect(redirect),
+    "https://www.facebook.com/story.php?story_fbid=1807322734034308&id=100069013472103"
   );
 });
 

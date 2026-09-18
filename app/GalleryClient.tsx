@@ -14,6 +14,7 @@ import { arabicNormalize } from "@/lib/arabic";
 import { isDuplicateRecipe } from "@/lib/dedupe";
 import { requestJson, jsonBody, requestMessage, RequestError, validateImage } from "@/lib/request";
 import { toast } from "./Toast";
+import { TAG_GROUPS, canonicalizeTag, tagGroupId } from "@/lib/tags";
 
 const PLATFORM_LABEL: Record<string, string> = {
   instagram: "انستغرام", facebook: "فيسبوك", tiktok: "تيك توك",
@@ -44,7 +45,6 @@ export default function GalleryClient({
   const [onlyFav, setOnlyFav] = useState(params.get("favorite") === "1");
   const [onlyCooked, setOnlyCooked] = useState(params.get("cooked") === "1");
   const [sort, setSort] = useState<Sort>((["newest", "oldest", "fastest", "az"].includes(params.get("sort") || "") ? params.get("sort") : "newest") as Sort);
-  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showAllTags, setShowAllTags] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [canEdit, setCanEdit] = useState(false);
@@ -74,6 +74,15 @@ export default function GalleryClient({
     window.addEventListener("popstate", restore); return () => window.removeEventListener("popstate", restore);
   }, []);
   const photoRef = useRef<HTMLInputElement>(null);
+  const filterRef = useRef<HTMLDialogElement>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [filtersOpen]);
 
   const addByLink = async () => {
     if (adding || working) return;
@@ -119,11 +128,27 @@ export default function GalleryClient({
     return [...s].sort((a, b) => a.localeCompare(b, "ar"));
   }, [recipes]);
 
-  const allTags = useMemo(() => {
+  const tagCounts = useMemo(() => {
     const count = new Map<string, number>();
     for (const r of recipes) for (const t of r.tags || []) count.set(t, (count.get(t) || 0) + 1);
-    return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t);
+    return count;
   }, [recipes]);
+
+  const allTags = useMemo(
+    () => [...tagCounts.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag),
+    [tagCounts]
+  );
+
+  const groupedTags = useMemo(
+    () =>
+      TAG_GROUPS.map((group) => ({
+        ...group,
+        tags: group.tags.filter((tag) => tagCounts.has(tag)),
+      })).filter((group) => group.tags.length),
+    [tagCounts]
+  );
+
+  const otherTags = useMemo(() => allTags.filter((tag) => !tagGroupId(tag)), [allTags]);
 
   const platforms = useMemo(
     () => [...new Set(recipes.map((r) => r.platform).filter(Boolean))] as string[],
@@ -178,8 +203,14 @@ export default function GalleryClient({
 
   const visibleRecipes = filtered.slice(0, visibleCount);
 
-  const toggleTag = (t: string) =>
-    setTags((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]));
+  const toggleTag = (tag: string) =>
+    setTags((current) => {
+      if (current.includes(tag)) return current.filter((item) => item !== tag);
+      const group = tagGroupId(tag);
+      return group
+        ? [...current.filter((item) => tagGroupId(item) !== group), tag]
+        : [...current, tag];
+    });
 
   const activeFilters =
     tags.length + (platform ? 1 : 0) + (status ? 1 : 0) + (q.trim() ? 1 : 0) +
@@ -224,11 +255,11 @@ export default function GalleryClient({
   };
 
   const reviewCount = recipes.filter((r) => r.status === "needs_review").length;
-  const visibleTags = showAllTags ? allTags : allTags.slice(0, 12);
+  const visibleOtherTags = showAllTags ? otherTags : otherTags.slice(0, 10);
 
   return (
     <div className="container">
-      <header className="topbar">
+      <header className="topbar gallery-header">
         <div className="brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.svg" alt="" className="brand-logo" width={40} height={40} />
@@ -238,8 +269,8 @@ export default function GalleryClient({
           </div>
         </div>
         <div className="header-actions">
-          <button aria-expanded={addOpen} className="btn-primary add-btn" disabled={adding || !!working} onClick={() => setAddOpen((o) => !o)}>
-            <Icon name="plus" size={18} /> إضافة
+          <button aria-expanded={addOpen} className="btn-primary add-btn" aria-label="إضافة وصفة" disabled={adding || !!working} onClick={() => setAddOpen((o) => !o)}>
+            <Icon name="plus" size={18} /><span className="add-label"> إضافة</span>
           </button>
           <CartLink />
           <HeaderMenu
@@ -306,22 +337,31 @@ export default function GalleryClient({
           )}
         </div>
 
-        <div className="filters-row">
-          <button className="chip-toggle" onClick={surprise} disabled={!recipes.length}><Icon name="dice" size={16} /> اختر لي وصفة</button>
+        <div className="quick-filters filters-row">
+          <button className="chip-toggle" onClick={surprise} disabled={!recipes.length}>اختر لي وصفة</button>
+          <button className={`chip-toggle ${activeFilters ? "active" : ""}`} aria-haspopup="dialog" aria-expanded={filtersOpen} onClick={() => { filterRef.current?.showModal(); setFiltersOpen(true); }}>
+            <Icon name="filter" size={16} /> تصفية {activeFilters > 0 ? `(${activeFilters})` : ""}
+          </button>
           <button aria-pressed={onlyFav} className={`chip-toggle ${onlyFav ? "active" : ""}`} onClick={() => setOnlyFav((f) => !f)}>
             <Icon name={onlyFav ? "heartFilled" : "heart"} size={16} /> المفضلة
           </button>
+          <select aria-label="ترتيب الوصفات" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
+            <option value="newest">الأحدث</option><option value="oldest">الأقدم</option>
+            <option value="fastest">الأسرع</option><option value="az">أبجدي</option>
+          </select>
+        </div>
+        {activeFilters > 0 && <div className="active-filter-summary">
+          <span>{[...tags, onlyFav && "المفضلة", onlyCooked && "طبختها", collection, platform && PLATFORM_LABEL[platform], status && (status === "ok" ? "مكتملة" : "غير مكتملة")].filter(Boolean).join(" · ") || "نتائج البحث"}</span>
+          <button className="link-btn" onClick={clearAll}>مسح الكل</button>
+        </div>}
+        <dialog className="filter-dialog" ref={filterRef} aria-labelledby="filters-title" onClose={() => setFiltersOpen(false)} onClick={(e) => { if (e.target === e.currentTarget) filterRef.current?.close(); }}>
+          <div className="filter-dialog-content">
+          <header className="filter-dialog-head"><div><h2 id="filters-title">تصفية الوصفات</h2><p>اختار تصنيفًا من كل مجموعة لتضييق النتائج</p></div><button className="icon-btn" aria-label="إغلاق التصفية" onClick={() => filterRef.current?.close()}><Icon name="x" /></button></header>
+          <div className="filter-dialog-scroll">
+          <div className="filters-row">
           <button aria-pressed={onlyCooked} className={`chip-toggle ${onlyCooked ? "active" : ""}`} onClick={() => setOnlyCooked((c) => !c)}>
             <Icon name="check" size={16} /> طبختها
           </button>
-          <button className={`chip-toggle ${filtersOpen ? "active" : ""}`} aria-expanded={filtersOpen} aria-controls="advanced-filters" onClick={() => setFiltersOpen(!filtersOpen)}><Icon name="search" size={16} /> تصفية الوصفات{activeFilters ? ` (${activeFilters})` : ""}</button>
-          <select aria-label="ترتيب الوصفات" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
-            <option value="newest">الأحدث أولًا</option><option value="oldest">الأقدم أولًا</option><option value="fastest">الأسرع تحضيرًا</option><option value="az">أبجدي</option>
-          </select>
-          {activeFilters > 0 && <button className="link-btn" onClick={clearAll}>مسح الفلاتر ({activeFilters})</button>}
-        </div>
-        <div id="advanced-filters" hidden={!filtersOpen}>
-        <div className="filters-row">
           {collections.length > 0 && (
             <select aria-label="تصفية حسب المجموعة" value={collection} onChange={(e) => setCollection(e.target.value)}>
               <option value="">كل المجموعات</option>
@@ -337,28 +377,65 @@ export default function GalleryClient({
           <select aria-label="تصفية حسب الحالة" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">كل الحالات</option>
             <option value="ok">مكتملة</option>
-            <option value="fetch_failed">تعذّر الاستيراد</option>
             <option value="needs_review">بحاجة لمراجعة{reviewCount ? ` (${reviewCount})` : ""}</option>
+            <option value="fetch_failed">تعذّر استخراجها</option>
           </select>
+          {activeFilters > 0 && (
+            <button className="chip-toggle clear" onClick={clearAll}>
+              <Icon name="x" size={15} /> مسح ({activeFilters})
+            </button>
+          )}
         </div>
 
         {allTags.length > 0 && (
-          <div className="tag-cloud">
-            {visibleTags.map((t) => (
-              <button key={t} aria-pressed={tags.includes(t)} className={`tag-pill ${tags.includes(t) ? "active" : ""}`} onClick={() => toggleTag(t)}>
-                {t}
-              </button>
+          <div className="tag-groups" aria-label="تصنيفات الوصفات">
+            {groupedTags.map((group) => (
+              <div className="tag-group" key={group.id}>
+                <span className="tag-group-label">{group.label}</span>
+                <div className="tag-cloud">
+                  {group.tags.map((tag) => (
+                    <button
+                      key={tag}
+                      className={`tag-pill ${tags.includes(tag) ? "active" : ""}`}
+                      onClick={() => toggleTag(tag)}
+                      aria-pressed={tags.includes(tag)}
+                    >
+                      {tag} <small>{tagCounts.get(tag)}</small>
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
-            {allTags.length > 12 && (
-              <button className="tag-pill more" onClick={() => setShowAllTags((s) => !s)}>
-                {showAllTags ? "أقل −" : `المزيد +${allTags.length - 12}`}
-              </button>
+            {otherTags.length > 0 && (
+              <div className="tag-group tag-group-other">
+                <span className="tag-group-label">وسوم أخرى</span>
+                <div className="tag-cloud">
+                  {visibleOtherTags.map((tag) => (
+                    <button
+                      key={tag}
+                      className={`tag-pill ${tags.includes(tag) ? "active" : ""}`}
+                      onClick={() => toggleTag(tag)}
+                      aria-pressed={tags.includes(tag)}
+                    >
+                      {tag} <small>{tagCounts.get(tag)}</small>
+                    </button>
+                  ))}
+                  {otherTags.length > 10 && (
+                    <button className="tag-pill more" onClick={() => setShowAllTags((show) => !show)}>
+                      {showAllTags ? "عرض أقل" : `المزيد +${otherTags.length - 10}`}
+                    </button>
+                  )}
+                </div>
+              </div>
             )}
           </div>
         )}
+          </div>
+          <footer className="filter-dialog-footer"><button className="btn-primary" onClick={() => filterRef.current?.close()}>عرض {filtered.length} وصفة</button><button className="btn-ghost" onClick={clearAll}>إعادة ضبط</button></footer>
+          </div>
+        </dialog>
       </div>
 
-      </div>
       <div className="results-meta" role="status" aria-live="polite">{filtered.length} من {recipes.length} وصفة</div>
 
       {filtered.length === 0 ? (

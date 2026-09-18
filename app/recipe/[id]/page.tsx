@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { supabasePublic } from "@/lib/supabase";
 import type { Recipe } from "@/lib/types";
 import RecipeView from "./RecipeView";
+import { classifyRecipeTags } from "@/lib/tags";
 
 export const revalidate = 0;
 
@@ -61,7 +62,11 @@ export default async function RecipePage({
     .maybeSingle();
   if (error) throw new Error("تعذّر تحميل الوصفة. حاول مرة أخرى.");
   if (!data) notFound();
-  const recipe = { ...(data as Recipe), notes: null };
+  const recipe = {
+    ...(data as Recipe),
+    tags: classifyRecipeTags(data as Recipe),
+    notes: null,
+  };
 
   let related: Recipe[] = [];
   if (recipe.tags?.length) {
