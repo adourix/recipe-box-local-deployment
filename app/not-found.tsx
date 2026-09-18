@@ -3,7 +3,7 @@ import { Icon } from "./Icon";
 
 export default function NotFound() {
   return (
-    <div className="container">
+    <main id="main-content" className="container">
       <div className="notfound">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/logo.svg" alt="" width={72} height={72} className="brand-logo" />
@@ -13,6 +13,6 @@ export default function NotFound() {
           <Icon name="back" size={17} /> العودة إلى كل الوصفات
         </Link>
       </div>
-    </div>
+    </main>
   );
 }

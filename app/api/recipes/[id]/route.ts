@@ -4,7 +4,7 @@ import { sectionizeIngredients } from "@/lib/gemini";
 import { normalizeQuantity } from "@/lib/scale";
 
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 function authorized(req: NextRequest): boolean {
   const key = process.env.EDIT_KEY;
@@ -56,7 +56,12 @@ export async function PATCH(
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const { id } = await params;
-  const body = await req.json().catch(() => null);
+  const form = req.headers.get("content-type")?.includes("multipart/form-data") ? await req.formData().catch(() => null) : null;
+  const body = form ? (() => { try { return JSON.parse(String(form.get("data") || "{}")); } catch { return null; } })() : await req.json().catch(() => null);
+  const image = form?.get("image");
+  if (image instanceof File && (!image.size || image.size > 10 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(image.type))) {
+    return NextResponse.json({error: "invalid image"}, {status: 415});
+  }
   if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "bad body" }, { status: 400 });
   }
@@ -108,11 +113,20 @@ export async function PATCH(
       update[k] = v === "" ? null : v;
     }
   }
-  if (Object.keys(update).length === 0) {
+  if (Object.keys(update).length === 0 && !(image instanceof File)) {
     return NextResponse.json({ error: "nothing to update" }, { status: 400 });
   }
 
   const sb = supabaseAdmin();
+
+  if (update.status === "ok" || "ingredients" in update || "steps" in update || "title" in update) {
+    const {data: current, error} = await sb.from("recipes").select("title,ingredients,steps,status").eq("id", id).single();
+    if (error || !current) return NextResponse.json({error: "not found"}, {status: 404});
+    const candidate = {...current, ...update};
+    if (candidate.status === "ok" && (!String(candidate.title || "").trim() || !Array.isArray(candidate.ingredients) || !candidate.ingredients.length || !Array.isArray(candidate.steps) || !candidate.steps.length)) {
+      return NextResponse.json({error: "title, ingredients and steps required"}, {status: 400});
+    }
+  }
 
   // Editing the ingredients: normalize quantities and RE-SLICE into sections so
   // the recipe keeps its grouping with the new values (multi-part recipes).
@@ -134,6 +148,14 @@ export async function PATCH(
       update.ingredients = ings;
     }
   }
+  let uploadedPath: string | null = null;
+  if (image instanceof File) {
+    const ext = image.type === "image/png" ? "png" : image.type === "image/webp" ? "webp" : "jpg";
+    uploadedPath = `${id}-${crypto.randomUUID()}.${ext}`;
+    const {error} = await sb.storage.from("recipe-images").upload(uploadedPath, Buffer.from(await image.arrayBuffer()), {contentType: image.type});
+    if (error) return NextResponse.json({error: "image upload failed"}, {status: 500});
+    update.image_url = sb.storage.from("recipe-images").getPublicUrl(uploadedPath).data.publicUrl;
+  }
   const { data, error } = await sb
     .from("recipes")
     .update(update)
@@ -141,6 +163,7 @@ export async function PATCH(
     .select()
     .single();
   if (error) {
+    if (uploadedPath) await sb.storage.from("recipe-images").remove([uploadedPath]);
     console.error("update failed", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }

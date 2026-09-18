@@ -12,14 +12,17 @@ export default async function Home({
   const { q = "", tag = "", collection = "" } = await searchParams;
 
   const sb = supabasePublic();
-  // Only the columns the gallery needs — skip heavy steps/raw/caption for speed.
-  const { data } = await sb
-    .from("recipes")
-    .select(
-      "id,created_at,source_url,platform,author,title,image_url,ingredients,tags,servings,time_minutes,status,favorite,collections,rating,cooked"
-    )
-    .order("created_at", { ascending: false })
-    .limit(500);
+  const data: Recipe[] = [];
+  // Supabase paginates reads. Fetch every batch so client filters cover the whole book.
+  const batchSize = 500;
+  for (let offset = 0; ; offset += batchSize) {
+    const {data: batch, error} = await sb.from("recipes")
+      .select("id,created_at,source_url,platform,author,title,image_url,ingredients,tags,servings,time_minutes,status,favorite,collections,rating,cooked")
+      .order("created_at", {ascending: false}).order("id", {ascending: false}).range(offset, offset + batchSize - 1);
+    if (error) throw new Error("تعذّر تحميل كتاب الوصفات. حاول مرة أخرى.");
+    data.push(...(batch as Recipe[]));
+    if (batch.length < batchSize) break;
+  }
 
   return (
     <GalleryClient

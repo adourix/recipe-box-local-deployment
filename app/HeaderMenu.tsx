@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { AccessForm } from "./AccessForm";
 import { Icon } from "./Icon";
 import { toast } from "./Toast";
-import { getEditKey, setEditKey } from "@/lib/client";
+import { getEditKey, setEditKey, hasEditKey, verifyEditKey, invalidateAccess } from "@/lib/client";
 
 export interface MenuAction {
   icon: string;
@@ -18,13 +19,35 @@ export function HeaderMenu({ actions = [] }: { actions?: MenuAction[] }) {
   const [open, setOpen] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
   const [dark, setDark] = useState(false);
-  const [keyInput, setKeyInput] = useState("");
-  const [busy, setBusy] = useState("");
+
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    setUnlocked(getEditKey().length > 0);
+    if (!open) return;
+    const close = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setOpen(false); triggerRef.current?.focus(); }
+    };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
+  }, [open]);
+
+  useEffect(() => {
+    setUnlocked(hasEditKey());
     setDark(document.documentElement.getAttribute("data-theme") === "dark");
   }, [open]);
+
+  useEffect(() => {
+    const sync = () => setUnlocked(hasEditKey());
+    const verify = () => { const key = getEditKey(); if (key && !hasEditKey()) verifyEditKey(key).catch(() => {}); sync(); };
+    const storage = (e: StorageEvent) => { if (e.key === "recipebox_edit_key" || e.key === null) { invalidateAccess(); verify(); } };
+    const show = () => { setOpen(true); setTimeout(() => document.getElementById("access-key")?.focus(), 0); };
+    verify();
+    window.addEventListener("editkey-changed", sync);
+    window.addEventListener("storage", storage);
+    window.addEventListener("edit-requested", show);
+    return () => { window.removeEventListener("editkey-changed", sync); window.removeEventListener("storage", storage); window.removeEventListener("edit-requested", show); };
+  }, []);
 
   const toggleTheme = () => {
     const next = dark ? "light" : "dark";
@@ -40,32 +63,24 @@ export function HeaderMenu({ actions = [] }: { actions?: MenuAction[] }) {
     fn?.();
   };
 
-  const admin = async (path: string, label: string, done: (j: any) => string) => {
-    setBusy(label);
-    toast(`جاري ${label}...`);
-    const res = await fetch(path, {
-      method: "POST",
-      headers: { "x-edit-key": getEditKey() },
-    }).catch(() => null);
-    setBusy("");
-    if (res && res.ok) toast(done(await res.json()), "success");
-    else toast(`تعذّر ${label}.`, "info");
-  };
-
   return (
-    <div className="menu-wrap">
+    <div className="menu-wrap" ref={wrapRef} onBlur={(e) => { if (e.relatedTarget && !e.currentTarget.contains(e.relatedTarget)) setOpen(false); }}>
       <button
+        ref={triggerRef}
+        aria-expanded={open}
+        aria-controls="preferences-panel"
         className={`icon-btn ${open ? "on" : ""}`}
         onClick={() => setOpen((o) => !o)}
-        aria-label="القائمة"
-        title="القائمة"
+        aria-label="الإعدادات"
+        title="الإعدادات"
       >
         <Icon name="menu" />
       </button>
       {open && (
         <>
           <div className="menu-backdrop" onClick={() => setOpen(false)} />
-          <div className="menu-panel" role="menu">
+          <div className="menu-panel" id="preferences-panel" aria-label="الإعدادات">
+            <div className="menu-head">الإعدادات</div>
             {actions.map((a, i) =>
               a.href ? (
                 <Link key={i} href={a.href} className="menu-item" onClick={() => setOpen(false)}>
@@ -95,26 +110,6 @@ export function HeaderMenu({ actions = [] }: { actions?: MenuAction[] }) {
                   <Icon name="unlock" size={16} /> وضع التحرير مفعّل
                 </div>
                 <button
-                  className="menu-item"
-                  disabled={!!busy}
-                  onClick={() =>
-                    admin("/api/retag", "تنظيف الوسوم", (j) => `تم توحيد الوسوم (${j.tagsBefore}→${j.tagsAfter}).`)
-                  }
-                >
-                  <Icon name="refresh" size={18} className={busy === "تنظيف الوسوم" ? "spin" : ""} />{" "}
-                  {busy === "تنظيف الوسوم" ? "جاري تنظيف الوسوم..." : "تنظيف الوسوم"}
-                </button>
-                <button
-                  className="menu-item"
-                  disabled={!!busy}
-                  onClick={() =>
-                    admin("/api/sections", "تقسيم المكونات", (j) => `تم تقسيم ${j.updated} وصفة.`)
-                  }
-                >
-                  <Icon name="utensils" size={18} className={busy === "تقسيم المكونات" ? "spin" : ""} />{" "}
-                  {busy === "تقسيم المكونات" ? "جاري تقسيم المكونات..." : "تقسيم المكونات"}
-                </button>
-                <button
                   className="menu-item danger"
                   onClick={() => {
                     setEditKey("");
@@ -127,37 +122,7 @@ export function HeaderMenu({ actions = [] }: { actions?: MenuAction[] }) {
                 </button>
               </>
             ) : (
-              <div className="menu-unlock">
-                <div className="menu-head">
-                  <Icon name="lock" size={16} /> وضع التحرير
-                </div>
-                <input
-                  type="password"
-                  value={keyInput}
-                  onChange={(e) => setKeyInput(e.target.value)}
-                  placeholder="مفتاح التحرير"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && keyInput.trim()) {
-                      setEditKey(keyInput.trim());
-                      setUnlocked(true);
-                      setKeyInput("");
-                      toast("تم تفعيل وضع التحرير.", "success");
-                    }
-                  }}
-                />
-                <button
-                  className="btn-primary"
-                  onClick={() => {
-                    if (!keyInput.trim()) return;
-                    setEditKey(keyInput.trim());
-                    setUnlocked(true);
-                    setKeyInput("");
-                    toast("تم تفعيل وضع التحرير.", "success");
-                  }}
-                >
-                  تفعيل
-                </button>
-              </div>
+              <AccessForm onUnlocked={() => { setUnlocked(true); setOpen(false); toast("تم تفعيل وضع التحرير.", "success"); }} />
             )}
           </div>
         </>

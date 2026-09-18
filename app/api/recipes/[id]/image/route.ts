@@ -24,7 +24,8 @@ export async function POST(
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "no file" }, { status: 400 });
   }
-  if (file.size > 10 * 1024 * 1024) {
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) return NextResponse.json({error: "unsupported image"}, {status: 415});
+  if (!file.size || file.size > 10 * 1024 * 1024) {
     return NextResponse.json({ error: "file too large" }, { status: 400 });
   }
 

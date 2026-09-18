@@ -12,9 +12,11 @@ export function CartLink() {
     refresh();
     window.addEventListener("shopping-changed", refresh);
     window.addEventListener("focus", refresh);
+    window.addEventListener("storage", refresh);
     return () => {
       window.removeEventListener("shopping-changed", refresh);
       window.removeEventListener("focus", refresh);
+      window.removeEventListener("storage", refresh);
     };
   }, []);
   return (

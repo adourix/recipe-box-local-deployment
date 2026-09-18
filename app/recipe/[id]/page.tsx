@@ -49,15 +49,17 @@ export default async function RecipePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) notFound();
   const sb = supabasePublic();
   // Note: `notes` is private (anon can't read it); it's loaded client-side when unlocked.
-  const { data } = await sb
+  const { data, error } = await sb
     .from("recipes")
     .select(
       "id,created_at,source_url,platform,author,title,caption,image_url,ingredients,ingredient_sections,steps,tags,servings,time_minutes,status,favorite,collections,nutrition,rating,cooked,lang"
     )
     .eq("id", id)
-    .single();
+    .maybeSingle();
+  if (error) throw new Error("تعذّر تحميل الوصفة. حاول مرة أخرى.");
   if (!data) notFound();
   const recipe = { ...(data as Recipe), notes: null };
 

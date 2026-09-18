@@ -19,8 +19,9 @@ export async function POST(req: NextRequest) {
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "no file" }, { status: 400 });
   }
-  if (file.size > 12 * 1024 * 1024) {
-    return NextResponse.json({ error: "file too large" }, { status: 400 });
+  if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) return NextResponse.json({error: "unsupported image"}, {status: 415});
+  if (!file.size || file.size > 12 * 1024 * 1024) {
+    return NextResponse.json({ error: "file too large" }, { status: 413 });
   }
   try {
     const buf = Buffer.from(await file.arrayBuffer());

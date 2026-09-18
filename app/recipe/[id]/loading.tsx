@@ -1,6 +1,6 @@
 export default function Loading() {
   return (
-    <div className="container recipe-page">
+    <main id="main-content" aria-busy="true" aria-label="جاري تحميل الوصفات" className="container recipe-page">
       <div className="recipe-topbar">
         <div className="skeleton" style={{ width: 40, height: 40, borderRadius: 12 }} />
       </div>
@@ -9,6 +9,6 @@ export default function Loading() {
       <div className="skeleton" style={{ height: 14, width: "40%", marginBottom: 20 }} />
       <div className="skeleton" style={{ height: 160, borderRadius: 16, marginBottom: 20 }} />
       <div className="skeleton" style={{ height: 220, borderRadius: 16 }} />
-    </div>
+    </main>
   );
 }

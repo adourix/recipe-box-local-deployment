@@ -5,12 +5,20 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import type { Nutrition, Recipe } from "@/lib/types";
-import { getEditKey, hasEditKey, addToShopping } from "@/lib/client";
+import { getEditKey, hasEditKey, addToShopping, requestUnlock } from "@/lib/client";
 import { CartLink } from "@/app/CartLink";
 import { HeaderMenu } from "@/app/HeaderMenu";
 import { scaleIngredient, scaleInstruction, SCALE_OPTIONS } from "@/lib/scale";
 import { Icon } from "@/app/Icon";
+import { IngredientChecklist } from "@/app/IngredientChecklist";
+import { requestJson, requestMessage, jsonBody, validateImage, RequestError } from "@/lib/request";
+import { recipeSource, recipeText } from "@/lib/recipe-format";
+import { useDraftGuard } from "@/lib/use-draft-guard";
 import { toast } from "@/app/Toast";
+
+// Private drafts exist only in memory and are erased when access is locked.
+const noteDrafts = new Map<string, string>();
+const photoDrafts = new Map<string, File>();
 
 const PLATFORM_LABEL: Record<string, string> = {
   instagram: "انستغرام",
@@ -46,83 +54,66 @@ export default function RecipeView({
   const [scale, setScale] = useState(1);
   const [notes, setNotes] = useState(recipe.notes || "");
   const [notesSaved, setNotesSaved] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const actionBusy = useRef(false);
+  const noteDraft = useRef(false);
+  const [notesDirty, setNotesDirty] = useState(false);
+  useDraftGuard(notesDirty);
+
 
   // Cook mode starts fresh (all unchecked) every visit.
   useEffect(() => {
     setCheckedState([]);
   }, [recipe.id]);
 
-  // Reflect the unlock state live (no reload) + load private notes when unlocked.
   useEffect(() => {
+    let active = true;
+    let pending: AbortController | null = null;
     const sync = () => {
-      const editable = hasEditKey();
-      setCanEdit(editable);
-      if (editable) {
-        fetch(`/api/recipes/${recipe.id}`, { headers: { "x-edit-key": getEditKey() } })
-          .then((res) => (res.ok ? res.json() : null))
-          .then((d) => {
-            if (d && typeof d.notes === "string") {
-              setNotes(d.notes);
-              setR((c) => ({ ...c, notes: d.notes }));
-            }
-          })
-          .catch(() => {});
+      pending?.abort();
+      const editable = hasEditKey(); setCanEdit(editable);
+      if (!editable) {
+        noteDrafts.clear(); noteDraft.current = false; setNotesDirty(false); setNotes(""); setNotesSaved(false);
+        setR(c => ({...c, notes: null})); setEditing(false);
+        return;
       }
+      if (noteDrafts.has(recipe.id)) { noteDraft.current = true; setNotesDirty(true); setNotes(noteDrafts.get(recipe.id)!); }
+      else { noteDraft.current = false; setNotesDirty(false); setNotes(""); setR(c => ({...c, notes: null})); }
+      const key = getEditKey(); pending = new AbortController();
+      const signal = pending.signal;
+      requestJson<{notes: string | null}>(`/api/recipes/${recipe.id}`, {signal}).then(d => {
+        if (!active || signal.aborted || !hasEditKey() || getEditKey() !== key || noteDraft.current) return;
+        setNotes(d.notes || ""); setR(c => ({...c, notes: d.notes}));
+      }).catch(e => { if (!signal.aborted) toast(requestMessage(e), "error"); });
     };
-    sync();
-    window.addEventListener("editkey-changed", sync);
-    return () => window.removeEventListener("editkey-changed", sync);
+    sync(); window.addEventListener("editkey-changed", sync);
+    return () => { active = false; pending?.abort(); window.removeEventListener("editkey-changed", sync); };
   }, [recipe.id]);
 
-  // Keep in sync when the server re-renders (e.g. after retry via router.refresh).
-  useEffect(() => {
-    setR(recipe);
-    setNotes(recipe.notes || "");
-  }, [recipe]);
+  useEffect(() => { setR(current => ({...recipe, notes: current.notes})); }, [recipe]);
 
   // Personal-field writer (favorite / rating / cooked / notes).
   const patch = async (fields: Record<string, unknown>): Promise<boolean> => {
-    if (!hasEditKey()) {
-      toast("فعّل وضع التحرير أولًا (زر القفل).", "error");
-      return false;
-    }
-    const prev: Record<string, unknown> = {};
-    for (const k of Object.keys(fields)) prev[k] = (r as unknown as Record<string, unknown>)[k];
-    setR((c) => ({ ...c, ...fields }));
-    const res = await fetch(`/api/recipes/${r.id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json", "x-edit-key": getEditKey() },
-      body: JSON.stringify(fields),
-    }).catch(() => null);
-    if (!res || !res.ok) {
-      setR((c) => ({ ...c, ...prev })); // revert optimistic change
-      toast("تعذّر الحفظ.", "error");
-      return false;
-    }
-    return true;
+    if (!hasEditKey()) { requestUnlock(); return false; }
+    if (actionBusy.current) return false;
+    actionBusy.current = true; setBusy(true);
+    const key = getEditKey();
+    try {
+      const result = await requestJson<{recipe: Recipe}>(`/api/recipes/${r.id}`, {...jsonBody(fields), method: "PATCH"});
+      if (hasEditKey() && getEditKey() === key) setR({...result.recipe, notes: noteDraft.current ? notes : result.recipe.notes});
+      return hasEditKey() && getEditKey() === key;
+    } catch(e) { toast(requestMessage(e), "error"); return false; }
+    finally { actionBusy.current = false; setBusy(false); }
   };
 
-  const completeNutrition = async (): Promise<Nutrition | null> => {
-    if (!hasEditKey()) {
-      toast("فعّل وضع التحرير أولًا (زر القفل).", "error");
-      return null;
-    }
+  const completeNutrition = async (draft?: {title: string; ingredients: string[]; servings: string}): Promise<Nutrition | null> => {
+    if (!hasEditKey()) { requestUnlock(); return null; }
     setBusy(true);
-    const res = await fetch("/api/nutrition", {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-edit-key": getEditKey() },
-      body: JSON.stringify({ id: r.id }),
-    }).catch(() => null);
-    setBusy(false);
-    if (!res?.ok) {
-      toast("تعذّر تقدير القيم الغذائية الآن.", "error");
-      return null;
-    }
-    const { nutrition } = (await res.json()) as { nutrition: Nutrition };
-    setR((current) => ({ ...current, nutrition }));
-    toast("تم إكمال القيم الغذائية الناقصة.", "success");
-    return nutrition;
+    try {
+      const {nutrition} = await requestJson<{nutrition: Nutrition}>("/api/nutrition", jsonBody(draft ? {draft} : {id: r.id}), 65000);
+      if (!draft) { setR(current => ({...current, nutrition})); toast("تم حفظ القيم الغذائية.", "success"); }
+      return nutrition;
+    } catch(e) { toast(requestMessage(e), "error"); return null; }
+    finally { setBusy(false); }
   };
 
   // Keep the screen awake while viewing a recipe (handy while cooking).
@@ -142,36 +133,26 @@ export default function RecipeView({
   const platformLabel = PLATFORM_LABEL[r.platform || "other"] || "المصدر";
   const ingredients = r.ingredients || [];
   const steps = r.steps || [];
-  const hasSource = r.source_url && r.source_url !== "video-upload";
+  const hasSource = recipeSource(r.source_url);
 
-  const copyRecipe = () => {
-    const txt = [
-      r.title,
-      "",
-      "المكونات:",
-      ...ingredients.map((x) => `- ${x}`),
-      "",
-      "الطريقة:",
-      ...steps.map((x, i) => `${i + 1}. ${x}`),
-      hasSource ? `\nالمصدر: ${r.source_url}` : "",
-    ].join("\n");
-    navigator.clipboard.writeText(txt);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  const copyRecipe = async () => {
+    try { await navigator.clipboard.writeText(recipeText(r, scale)); setCopied(true); setTimeout(() => setCopied(false), 1500); }
+    catch { toast("تعذّر النسخ. اسمح بالوصول إلى الحافظة ثم حاول مرة أخرى.", "error"); }
   };
 
   return (
     <div className="container recipe-page">
-      <div className="recipe-topbar">
+      <header className="recipe-topbar">
         <Link href="/" className="icon-btn" title="كل الوصفات" aria-label="رجوع">
           <Icon name="back" />
         </Link>
         <div className="topbar-actions">
           <button
             className={`icon-btn ${r.favorite ? "fav-on" : ""}`}
-            onClick={toggleFavorite}
+            disabled={busy} onClick={canEdit ? toggleFavorite : requestUnlock}
             title="المفضلة"
             aria-label="المفضلة"
+              aria-pressed={!!r.favorite}
           >
             <Icon name={r.favorite ? "heartFilled" : "heart"} />
           </button>
@@ -188,49 +169,33 @@ export default function RecipeView({
           <CartLink />
           <HeaderMenu />
         </div>
-      </div>
+      </header>
 
-      <main>
+      <main id="main-content">
       {editing ? (
         <EditForm
           r={r}
           busy={busy}
-          onImage={() => fileRef.current?.click()}
           onEstimateNutrition={completeNutrition}
           onCancel={() => setEditing(false)}
-          onSave={async (patch) => {
-            setBusy(true);
-            const res = await fetch(`/api/recipes/${r.id}`, {
-              method: "PATCH",
-              headers: {
-                "content-type": "application/json",
-                "x-edit-key": getEditKey(),
-              },
-              body: JSON.stringify(patch),
-            });
-            setBusy(false);
-            if (res.ok) {
-              const { recipe: updated } = await res.json();
-              setR(updated);
-              setEditing(false);
-              router.refresh();
-              toast("تم حفظ التعديلات.", "success");
-            } else {
-              toast("فشل الحفظ — تأكد من مفتاح التحرير.", "error");
-            }
+          onSave={async (fields, image) => {
+            if (actionBusy.current) return false;
+            actionBusy.current = true; setBusy(true);
+            try {
+              let init: RequestInit = {...jsonBody(fields), method: "PATCH"};
+              if (image) { const form = new FormData(); form.append("data", JSON.stringify(fields)); form.append("image", image); init = {method: "PATCH", body: form}; }
+              const {recipe: updated} = await requestJson<{recipe: Recipe}>(`/api/recipes/${r.id}`, init, 65000);
+              setR({...updated, notes: noteDraft.current ? notes : updated.notes}); setEditing(false);
+              toast("تم حفظ التعديلات.", "success"); router.refresh(); return true;
+            } catch(e) { toast(requestMessage(e), "error"); return false; }
+            finally { actionBusy.current = false; setBusy(false); }
           }}
           onDelete={async () => {
             if (!confirm("حذف هذه الوصفة نهائيًا؟")) return;
             setBusy(true);
-            const res = await fetch(`/api/recipes/${r.id}`, {
-              method: "DELETE",
-              headers: { "x-edit-key": getEditKey() },
-            });
-            setBusy(false);
-            if (res.ok) {
-              toast("تم حذف الوصفة.", "success");
-              router.push("/");
-            } else toast("فشل الحذف.", "error");
+            try { await requestJson(`/api/recipes/${r.id}`, {method: "DELETE"}); toast("تم حذف الوصفة.", "success"); router.push("/"); }
+            catch(e) { toast(requestMessage(e), "error"); }
+            finally { setBusy(false); }
           }}
         />
       ) : (
@@ -248,6 +213,7 @@ export default function RecipeView({
             </div>
           )}
 
+          <p className="print-only">الكمية: {scale}×{r.servings ? ` من ${r.servings}` : ""}</p>
           <h1 className="recipe-title">{r.title || "وصفة بدون عنوان"}</h1>
 
           <div className="recipe-sub">
@@ -274,14 +240,17 @@ export default function RecipeView({
             {ingredients.length > 0 && (
               <button
                 className="btn-ghost"
-                onClick={() => {
-                  addToShopping(
+                onClick={async () => {
+                try {
+                  const accepted = await addToShopping(
                     r.id,
                     r.title || "وصفة",
                     ingredients.map((i) => scaleIngredient(i, scale))
                   );
+                  if (!accepted) return;
                   setAdded(true);
                   setTimeout(() => setAdded(false), 1500);
+                } catch(e) { toast(requestMessage(e), "error"); }
                 }}
               >
                 <Icon name="cart" size={17} /> {added ? "أضيفت" : "أضف للتسوق"}
@@ -299,19 +268,9 @@ export default function RecipeView({
                 disabled={busy}
                 onClick={async () => {
                   setBusy(true);
-                  const res = await fetch("/api/web-save", {
-                    method: "POST",
-                    headers: {
-                      "content-type": "application/json",
-                      "x-edit-key": getEditKey(),
-                    },
-                    body: JSON.stringify({ url: r.source_url }),
-                  });
-                  setBusy(false);
-                  if (res.ok) {
-                    router.refresh();
-                    toast("تمت إعادة الاستخراج.", "success");
-                  } else toast("تعذّرت إعادة المحاولة.", "error");
+                  try { await requestJson("/api/web-save", jsonBody({url: hasSource}), 310000); router.refresh(); toast("تمت إعادة الاستخراج.", "success"); }
+                  catch(e) { if (e instanceof RequestError && e.status === 409) router.refresh(); else toast(requestMessage(e), "error"); }
+                  finally { setBusy(false); }
                 }}
               >
                 <Icon name="refresh" size={17} className={busy ? "spin" : ""} />{" "}
@@ -319,7 +278,7 @@ export default function RecipeView({
               </button>
             )}
             {hasSource && (
-              <a className="btn-primary" href={r.source_url} target="_blank" rel="noopener noreferrer">
+              <a className="btn-primary" href={hasSource || undefined} target="_blank" rel="noopener noreferrer">
                 <Icon name="external" size={17} /> شاهد على {platformLabel}
               </a>
             )}
@@ -370,7 +329,7 @@ export default function RecipeView({
                   r.nutrition.protein_g == null ||
                   r.nutrition.carbs_g == null ||
                   r.nutrition.fat_g == null) && (
-                  <button className="nutrition-complete" onClick={completeNutrition} disabled={busy}>
+                  <button className="nutrition-complete" onClick={() => completeNutrition()} disabled={busy}>
                     <Icon name="refresh" size={15} className={busy ? "spin" : ""} />
                     {busy ? "جاري التقدير..." : "إكمال القيم الناقصة تلقائيًا"}
                   </button>
@@ -382,7 +341,7 @@ export default function RecipeView({
             <div className="section">
               <div className="section-head">
                 <h2><Icon name="utensils" size={18} /> المكونات</h2>
-                <span className="progress">
+                <span className="progress" role="status">
                   {checked.length}/{ingredients.length}
                 </span>
               </div>
@@ -391,52 +350,14 @@ export default function RecipeView({
                 {SCALE_OPTIONS.map((o) => (
                   <button
                     key={o.value}
-                    className={`scale-btn ${scale === o.value ? "active" : ""}`}
+                    aria-pressed={scale === o.value} className={`scale-btn ${scale === o.value ? "active" : ""}`}
                     onClick={() => setScale(o.value)}
                   >
                     {o.label}
                   </button>
                 ))}
               </div>
-              {r.ingredient_sections && r.ingredient_sections.length ? (
-                (() => {
-                  let gi = -1;
-                  return r.ingredient_sections.map((sec, si) => (
-                    <div key={si} className="ing-group">
-                      {sec.title && <h3 className="ing-section">{sec.title}</h3>}
-                      <ul className="ingredients">
-                        {sec.items.map((ing) => {
-                          gi++;
-                          const idx = gi;
-                          return (
-                            <li
-                              key={idx}
-                              className={checked.includes(idx) ? "done" : ""}
-                              onClick={() => toggleCheck(idx)}
-                            >
-                              <span className="tick">{checked.includes(idx) ? "✓" : ""}</span>
-                              {scaleIngredient(ing, scale)}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
-                  ));
-                })()
-              ) : (
-                <ul className="ingredients">
-                  {ingredients.map((ing, i) => (
-                    <li
-                      key={i}
-                      className={checked.includes(i) ? "done" : ""}
-                      onClick={() => toggleCheck(i)}
-                    >
-                      <span className="tick">{checked.includes(i) ? "✓" : ""}</span>
-                      {scaleIngredient(ing, scale)}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <IngredientChecklist ingredients={ingredients} sections={r.ingredient_sections} checked={checked} scale={scale} onToggle={toggleCheck} />
             </div>
           )}
 
@@ -460,12 +381,14 @@ export default function RecipeView({
 
           <div className="section no-print">
             <h2>ملاحظاتي وتقييمي</h2>
+            {!canEdit && <p className="helper-text">فعّل التحرير لحفظ المفضلة والتقييم والملاحظات. <button className="link-btn" onClick={requestUnlock}>تفعيل التحرير</button></p>}
+            <fieldset className="personal-fields" disabled={!canEdit || busy}>
             <div className="personal-row">
               <div className="stars" title="تقييم">
                 {[1, 2, 3, 4, 5].map((n) => (
                   <button
                     key={n}
-                    className="star-btn"
+                    className="star-btn" aria-pressed={n === r.rating}
                     onClick={() => patch({ rating: r.rating === n ? null : n })}
                     aria-label={`${n} نجوم`}
                   >
@@ -474,18 +397,19 @@ export default function RecipeView({
                 ))}
               </div>
               <button
-                className={`chip-toggle ${r.cooked ? "active" : ""}`}
+                aria-pressed={!!r.cooked} className={`chip-toggle ${r.cooked ? "active" : ""}`}
                 onClick={() => patch({ cooked: !r.cooked })}
               >
                 <Icon name="check" size={16} /> {r.cooked ? "طبختها" : "علّمها كمطبوخة"}
               </button>
             </div>
             <textarea
+              aria-label="ملاحظاتي على الوصفة"
               className="notes-area"
               placeholder="ملاحظاتي وتعديلاتي على الوصفة..."
               value={notes}
               onChange={(e) => {
-                setNotes(e.target.value);
+                noteDrafts.set(r.id, e.target.value); noteDraft.current = true; setNotesDirty(true); setNotes(e.target.value);
                 setNotesSaved(false);
               }}
               rows={3}
@@ -494,13 +418,14 @@ export default function RecipeView({
               className="btn-ghost"
               onClick={async () => {
                 if (await patch({ notes })) {
-                  setNotesSaved(true);
+                  noteDrafts.clear(); noteDrafts.delete(r.id); noteDraft.current = false; setNotesDirty(false); setNotesSaved(true);
                   toast("تم حفظ الملاحظة.", "success");
                 }
               }}
             >
               {notesSaved ? "✓ حُفظت" : "حفظ الملاحظة"}
             </button>
+            </fieldset>
           </div>
 
           {related.length > 0 && (
@@ -513,7 +438,7 @@ export default function RecipeView({
                       {rec.image_url ? (
                         <Image
                           src={rec.image_url}
-                          alt={rec.title || ""}
+                          alt=""
                           fill
                           sizes="150px"
                           style={{ objectFit: "cover" }}
@@ -532,31 +457,6 @@ export default function RecipeView({
       )}
       </main>
 
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/*"
-        hidden
-        onChange={async (e) => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-          setBusy(true);
-          const fd = new FormData();
-          fd.append("file", file);
-          const res = await fetch(`/api/recipes/${r.id}/image`, {
-            method: "POST",
-            headers: { "x-edit-key": getEditKey() },
-            body: fd,
-          });
-          setBusy(false);
-          if (res.ok) {
-            const { image_url } = await res.json();
-            setR((cur) => ({ ...cur, image_url }));
-            router.refresh();
-            toast("تم تحديث الصورة.", "success");
-          } else toast("فشل رفع الصورة.", "error");
-        }}
-      />
     </div>
   );
 }
@@ -567,16 +467,14 @@ function EditForm({
   onSave,
   onCancel,
   onDelete,
-  onImage,
   onEstimateNutrition,
 }: {
   r: Recipe;
   busy: boolean;
-  onSave: (patch: Record<string, unknown>) => void;
+  onSave: (patch: Record<string, unknown>, image?: File) => Promise<boolean>;
   onCancel: () => void;
   onDelete: () => void;
-  onImage: () => void;
-  onEstimateNutrition: () => Promise<Nutrition | null>;
+  onEstimateNutrition: (draft: {title: string; ingredients: string[]; servings: string}) => Promise<Nutrition | null>;
 }) {
   const [title, setTitle] = useState(r.title || "");
   const [author, setAuthor] = useState(r.author || "");
@@ -591,16 +489,49 @@ function EditForm({
   const [carbs, setCarbs] = useState(r.nutrition?.carbs_g?.toString() || "");
   const [fat, setFat] = useState(r.nutrition?.fat_g?.toString() || "");
 
+  const [photo, setPhoto] = useState<File | undefined>(() => photoDrafts.get(r.id));
+  const [draftReady, setDraftReady] = useState(false);
+  const [restored, setRestored] = useState(false);
+  const [preview, setPreview] = useState(r.image_url || "");
+  const [error, setError] = useState("");
+  const photoInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (!photo) { setPreview(r.image_url || ""); return; } const url = URL.createObjectURL(photo); setPreview(url); return () => URL.revokeObjectURL(url); }, [photo, r.image_url]);
+  const dirty = !!photo || title !== (r.title || "") || author !== (r.author || "") || servings !== (r.servings || "") || time !== (r.time_minutes ? String(r.time_minutes) : "") || tags !== (r.tags || []).join("، ") || collections !== (r.collections || []).join("، ") || ingredients !== (r.ingredients || []).join("\n") || steps !== (r.steps || []).join("\n") || calories !== (r.nutrition?.calories?.toString() || "") || protein !== (r.nutrition?.protein_g?.toString() || "") || carbs !== (r.nutrition?.carbs_g?.toString() || "") || fat !== (r.nutrition?.fat_g?.toString() || "");
+  useDraftGuard(dirty);
+  const draftKey = `recipebox-draft:${r.id}`;
+  const discard = () => { sessionStorage.removeItem(draftKey); photoDrafts.delete(r.id); onCancel(); };
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(draftKey) || "null");
+      if (saved && typeof saved === "object") {
+        const setters: Record<string, (v: string) => void> = {title: setTitle, author: setAuthor, servings: setServings, time: setTime, tags: setTags, collections: setCollections, ingredients: setIngredients, steps: setSteps, calories: setCalories, protein: setProtein, carbs: setCarbs, fat: setFat};
+        for (const [key, setter] of Object.entries(setters)) if (typeof saved[key] === "string") setter(saved[key]);
+        setRestored(true);
+      }
+    } catch {} finally { setDraftReady(true); }
+  }, [draftKey]);
+  useEffect(() => {
+    if (!draftReady) return;
+    try {
+      if (dirty) sessionStorage.setItem(draftKey, JSON.stringify({title, author, servings, time, tags, collections, ingredients, steps, calories, protein, carbs, fat}));
+      else sessionStorage.removeItem(draftKey);
+      if (photo) photoDrafts.set(r.id, photo); else photoDrafts.delete(r.id);
+    } catch { setError("تعذّر حفظ المسودة على هذا الجهاز. لا تغادر قبل حفظ التغييرات."); }
+  }, [draftReady, dirty, draftKey, r.id, title, author, servings, time, tags, collections, ingredients, steps, calories, protein, carbs, fat, photo]);
   const toNumber = (value: string) => (value.trim() === "" ? null : Number(value));
-  const save = () => {
+  const save = async () => {
+    setError("");
+    if (!title.trim() || !ingredients.trim() || !steps.trim()) { setError("أدخل عنوانًا ومكونات وخطوات قبل حفظ وصفة مكتملة."); return; }
+    if (time && (!Number.isFinite(Number(time)) || Number(time) < 0)) { setError("أدخل وقتًا صالحًا."); return; }
     const nutrition = {
       calories: toNumber(calories),
       protein_g: toNumber(protein),
       carbs_g: toNumber(carbs),
       fat_g: toNumber(fat),
     };
-    onSave({
-      title,
+    if (Object.values(nutrition).some(v => v != null && (!Number.isFinite(v) || v < 0))) { setError("القيم الغذائية يجب أن تكون أرقامًا موجبة."); return; }
+    const fields: Record<string, unknown> = {
+      title: title.trim(),
       author,
       servings,
       time_minutes: time ? Number(time) : null,
@@ -610,30 +541,37 @@ function EditForm({
       steps: steps.split("\n").map((s) => s.trim()).filter(Boolean),
       nutrition: Object.values(nutrition).every((value) => value == null) ? null : nutrition,
       status: "ok",
-    });
+    };
+    const changes = Object.fromEntries(Object.entries(fields).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(r[key as keyof Recipe])));
+    if (!Object.keys(changes).length && !photo) { discard(); return; }
+    if (await onSave(changes, photo)) { sessionStorage.removeItem(draftKey); photoDrafts.delete(r.id); }
   };
 
   const estimateNutrition = async () => {
-    const nutrition = await onEstimateNutrition();
+    const nutrition = await onEstimateNutrition({title, ingredients: ingredients.split("\n").map(s => s.trim()).filter(Boolean), servings});
     if (!nutrition) return;
-    setCalories(nutrition.calories?.toString() || "");
-    setProtein(nutrition.protein_g?.toString() || "");
-    setCarbs(nutrition.carbs_g?.toString() || "");
-    setFat(nutrition.fat_g?.toString() || "");
+    setCalories(current => current || nutrition.calories?.toString() || "");
+    setProtein(current => current || nutrition.protein_g?.toString() || "");
+    setCarbs(current => current || nutrition.carbs_g?.toString() || "");
+    setFat(current => current || nutrition.fat_g?.toString() || "");
   };
 
   return (
-    <div className="edit-form">
+    <form className="edit-form" onSubmit={e => { e.preventDefault(); if (!busy) save(); }}>
+      <h1>تعديل الوصفة</h1>
+      <p className="helper-text">تُحفظ الصورة والقيم والتعديلات عند الضغط على حفظ.</p>
+      {restored && <p role="status" className="helper-text">تمت استعادة مسودتك غير المحفوظة.</p>}
+      {error && <p role="alert" className="field-error">{error}</p>}
       <div className="edit-photo">
         <div className="edit-photo-preview">
-          {r.image_url ? (
+          {preview ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={r.image_url} alt={`صورة ${r.title || "الوصفة"}`} className="recipe-hero" />
+            <img src={preview} alt={`صورة ${r.title || "الوصفة"}`} className="recipe-hero" />
           ) : (
             <div className="recipe-hero placeholder-hero">🍲</div>
           )}
         </div>
-        <button type="button" className="photo-change-button" onClick={onImage} disabled={busy}>
+        <button type="button" className="photo-change-button" onClick={() => photoInput.current?.click()} disabled={busy}>
           <span className="photo-change-icon"><Icon name="camera" size={20} /></span>
           <span>
             <strong>{r.image_url ? "استبدال صورة الوصفة" : "إضافة صورة للوصفة"}</strong>
@@ -642,22 +580,24 @@ function EditForm({
         </button>
       </div>
 
-      <label>العنوان</label>
-      <input value={title} onChange={(e) => setTitle(e.target.value)} />
+      <input ref={photoInput} type="file" accept="image/jpeg,image/png,image/webp" hidden onChange={e => { const file = e.target.files?.[0]; e.target.value = ""; if (!file) return; try { validateImage(file, 10); setPhoto(file); setError(""); } catch(e) { setError(requestMessage(e)); } }} />
+      {photo && <button type="button" className="link-btn" onClick={() => setPhoto(undefined)}>إلغاء تغيير الصورة</button>}
+      <label htmlFor="edit-title">العنوان</label>
+      <input id="edit-title" value={title} onChange={(e) => setTitle(e.target.value)} />
 
       <div className="edit-row">
         <div>
-          <label>الطاهي / المصدر</label>
-          <input value={author} onChange={(e) => setAuthor(e.target.value)} />
+          <label htmlFor="edit-author">الطاهي / المصدر</label>
+          <input id="edit-author" value={author} onChange={(e) => setAuthor(e.target.value)} />
         </div>
         <div>
-          <label>الحصص</label>
-          <input value={servings} onChange={(e) => setServings(e.target.value)} />
+          <label htmlFor="edit-servings">الحصص</label>
+          <input id="edit-servings" value={servings} onChange={(e) => setServings(e.target.value)} />
         </div>
         <div>
-          <label>الوقت (دقيقة)</label>
+          <label htmlFor="edit-time">الوقت (دقيقة)</label>
           <input
-            type="number"
+            id="edit-time" min="0" type="number"
             value={time}
             onChange={(e) => setTime(e.target.value)}
           />
@@ -665,9 +605,9 @@ function EditForm({
       </div>
 
       <fieldset className="nutrition-editor">
+        <legend>القيم الغذائية</legend>
         <div className="nutrition-editor-head">
           <div>
-            <legend>القيم الغذائية</legend>
             <p>إجمالي الوصفة كاملة، وليست للحصة الواحدة.</p>
           </div>
           <button type="button" className="btn-ghost" onClick={estimateNutrition} disabled={busy}>
@@ -695,34 +635,34 @@ function EditForm({
         </div>
       </fieldset>
 
-      <label>الوسوم (افصل بفاصلة)</label>
-      <input value={tags} onChange={(e) => setTags(e.target.value)} />
+      <label htmlFor="edit-tags">الوسوم (افصل بفاصلة)</label>
+      <input id="edit-tags" value={tags} onChange={(e) => setTags(e.target.value)} />
 
-      <label>المجموعات (عشاء، حلويات، رمضان...)</label>
-      <input value={collections} onChange={(e) => setCollections(e.target.value)} />
+      <label htmlFor="edit-collections">المجموعات (عشاء، حلويات، رمضان...)</label>
+      <input id="edit-collections" value={collections} onChange={(e) => setCollections(e.target.value)} />
 
-      <label>المكونات (سطر لكل مكوّن)</label>
+      <label htmlFor="edit-ingredients">المكونات (سطر لكل مكوّن)</label>
       <textarea
-        rows={8}
+        id="edit-ingredients" rows={8}
         value={ingredients}
         onChange={(e) => setIngredients(e.target.value)}
       />
 
-      <label>الخطوات (سطر لكل خطوة)</label>
-      <textarea rows={10} value={steps} onChange={(e) => setSteps(e.target.value)} />
+      <label htmlFor="edit-steps">الخطوات (سطر لكل خطوة)</label>
+      <textarea id="edit-steps" rows={10} value={steps} onChange={(e) => setSteps(e.target.value)} />
 
       <div className="edit-actions">
-        <button className="btn-primary" onClick={save} disabled={busy}>
+        <button type="submit" className="btn-primary" disabled={busy}>
           <Icon name={busy ? "refresh" : "check"} size={17} className={busy ? "spin" : ""} />{" "}
           {busy ? "جاري الحفظ..." : "حفظ"}
         </button>
-        <button className="btn-ghost" onClick={onCancel} disabled={busy}>
+        <button type="button" className="btn-ghost" onClick={() => { if (!dirty || confirm("تجاهل التغييرات غير المحفوظة؟")) discard(); }} disabled={busy}>
           إلغاء
         </button>
-        <button className="btn-danger" onClick={onDelete} disabled={busy}>
+        <button type="button" className="btn-danger" onClick={onDelete} disabled={busy}>
           <Icon name="trash" size={17} /> حذف الوصفة
         </button>
       </div>
-    </div>
+    </form>
   );
 }

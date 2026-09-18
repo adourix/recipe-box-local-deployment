@@ -1,34 +1,27 @@
-// Conservative offline support: ONLY intercept top-level page navigations.
-// Next.js chunks, RSC payloads, API calls and images go straight to the network
-// so the SW can never serve a stale build or break requests.
-const CACHE = "recipebox-v2";
-
-self.addEventListener("install", (e) => {
-  e.waitUntil(
-    caches.open(CACHE).then((c) => c.addAll(["/", "/shopping"]).catch(() => {}))
-  );
+// Cache navigations only. Never substitute another route for a missing page.
+const CACHE = "recipebox-v3";
+self.addEventListener("install", event => {
+  event.waitUntil(caches.open(CACHE).then(cache => cache.add("/offline.html")));
   self.skipWaiting();
 });
-
-self.addEventListener("activate", (e) => {
-  e.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
-  );
-  self.clients.claim();
+self.addEventListener("activate", event => {
+  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key.startsWith("recipebox-") && key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim()));
 });
-
-self.addEventListener("fetch", (e) => {
-  const req = e.request;
-  if (req.method !== "GET" || req.mode !== "navigate") return;
-  e.respondWith(
-    fetch(req)
-      .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
-        return res;
-      })
-      .catch(() => caches.match(req).then((m) => m || caches.match("/")))
-  );
+self.addEventListener("fetch", event => {
+  const request = event.request;
+  if (request.method !== "GET" || request.mode !== "navigate") return;
+  event.respondWith((async () => {
+    try {
+      const response = await fetch(request);
+      if (response.ok) {
+        const copy = response.clone();
+        event.waitUntil(caches.open(CACHE).then(cache => cache.put(request, copy)).catch(() => {}));
+      }
+      return response;
+    } catch {
+      // HTML alone cannot guarantee a functioning Next app without its JS chunks.
+      // Show an honest self-contained offline screen rather than a broken cached app.
+      return await caches.match("/offline.html") || new Response("أنت غير متصل. حاول مرة أخرى عند عودة الاتصال.", {headers:{"Content-Type":"text/plain; charset=utf-8"},status:503});
+    }
+  })());
 });

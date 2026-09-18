@@ -2,25 +2,29 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { getShopping, setShopping, type ShopItem } from "@/lib/client";
+import { getShopping, updateShopping, type ShopItem } from "@/lib/client";
+import { toast } from "@/app/Toast";
+import { HeaderMenu } from "@/app/HeaderMenu";
+import { shoppingKey } from "@/lib/shopping";
+import { requestMessage } from "@/lib/request";
 import { Icon } from "@/app/Icon";
 
 export default function ShoppingClient() {
   const [items, setItems] = useState<ShopItem[]>([]);
 
   useEffect(() => {
-    setItems(getShopping());
+    const sync = () => setItems(getShopping()); sync();
+    window.addEventListener("shopping-changed", sync); window.addEventListener("storage", sync); window.addEventListener("focus", sync);
+    return () => { window.removeEventListener("shopping-changed", sync); window.removeEventListener("storage", sync); window.removeEventListener("focus", sync); };
   }, []);
-
-  const update = (next: ShopItem[]) => {
-    setItems(next);
-    setShopping(next);
+  const update = async (change: (items: ShopItem[]) => ShopItem[]) => {
+    setItems(change(getShopping()));
+    try { setItems(await updateShopping(change)); } catch (e) { setItems(getShopping()); toast(requestMessage(e), "error"); }
   };
-  const toggle = (i: number) =>
-    update(items.map((it, idx) => (idx === i ? { ...it, checked: !it.checked } : it)));
-  const remove = (i: number) => update(items.filter((_, idx) => idx !== i));
-  const clearChecked = () => update(items.filter((it) => !it.checked));
-  const clearAll = () => update([]);
+  const toggle = (i: number, checked: boolean) => { const key = shoppingKey(items[i]); return update(current => current.map(it => shoppingKey(it) === key ? {...it, checked} : it)); };
+  const remove = (i: number) => { const key = shoppingKey(items[i]); return update(current => current.filter(it => shoppingKey(it) !== key)); };
+  const clearChecked = () => update(current => current.filter(it => !it.checked));
+  const clearAll = () => { if (confirm("مسح قائمة التسوق بالكامل؟")) update(() => []); };
 
   const groups = useMemo(() => {
     const g = new Map<string, { title: string; entries: { it: ShopItem; i: number }[] }>();
@@ -34,9 +38,10 @@ export default function ShoppingClient() {
 
   const doneCount = items.filter((i) => i.checked).length;
 
-  const copyList = () => {
+  const copyList = async () => {
     const txt = items.map((i) => `${i.checked ? "✓" : "•"} ${i.text}`).join("\n");
-    navigator.clipboard.writeText("قائمة التسوق:\n" + txt);
+    try { await navigator.clipboard.writeText("قائمة التسوق:\n" + txt); toast("تم نسخ القائمة.", "success"); }
+    catch { toast("تعذّر النسخ. حاول مرة أخرى.", "error"); }
   };
 
   return (
@@ -51,10 +56,12 @@ export default function ShoppingClient() {
             </span>
           </div>
         </div>
-        <Link href="/" className="btn-ghost">
+        <div className="header-actions"><HeaderMenu /><Link href="/" className="btn-ghost">
           <Icon name="back" size={16} /> المعرض
-        </Link>
+        </Link></div>
       </header>
+      <main id="main-content">
+      <p className="helper-text">قائمتك محفوظة على هذا الجهاز. علّم المكونات أثناء التسوق.</p>
 
       {items.length === 0 ? (
         <div className="empty">
@@ -62,6 +69,7 @@ export default function ShoppingClient() {
           <p>
             القائمة فارغة. افتح أي وصفة واضغط «أضف للتسوق» لإضافة مكوّناتها هنا.
           </p>
+          <Link href="/" className="btn-primary">تصفح الوصفات</Link>
         </div>
       ) : (
         <>
@@ -83,13 +91,8 @@ export default function ShoppingClient() {
               <ul className="ingredients">
                 {g.entries.map(({ it, i }) => (
                   <li key={i} className={it.checked ? "done" : ""}>
-                    <span className="tick" onClick={() => toggle(i)}>
-                      {it.checked ? "✓" : ""}
-                    </span>
-                    <span style={{ flex: 1 }} onClick={() => toggle(i)}>
-                      {it.text}
-                    </span>
-                    <button className="mini-x" onClick={() => remove(i)} aria-label="حذف">
+                    <label className="check-label"><input type="checkbox" checked={it.checked} onChange={e => toggle(i, e.target.checked)} /><span className="tick" aria-hidden="true">{it.checked ? "✓" : ""}</span><span>{it.text}</span></label>
+                    <button className="mini-x" onClick={() => remove(i)} aria-label={`حذف ${it.text}`}>
                       <Icon name="x" size={14} />
                     </button>
                   </li>
@@ -99,6 +102,7 @@ export default function ShoppingClient() {
           ))}
         </>
       )}
+      </main>
     </div>
   );
 }

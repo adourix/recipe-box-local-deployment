@@ -1,6 +1,6 @@
 export default function Loading() {
   return (
-    <div className="container">
+    <main id="main-content" aria-busy="true" aria-label="جاري تحميل الوصفات" className="container">
       <div className="topbar">
         <div className="brand">
           <div className="skeleton" style={{ width: 40, height: 40, borderRadius: 12 }} />
@@ -22,6 +22,6 @@ export default function Loading() {
           </div>
         ))}
       </div>
-    </div>
+    </main>
   );
 }

@@ -1,132 +1,57 @@
 "use client";
-
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { getEditKey, setEditKey } from "@/lib/client";
+import { getEditKey, hasEditKey, verifyEditKey } from "@/lib/client";
+import { requestJson, jsonBody, requestMessage, RequestError } from "@/lib/request";
+import { AccessForm } from "@/app/AccessForm";
 
 type State = "idle" | "saving" | "done" | "duplicate" | "error" | "nokey" | "nourl";
-
-export default function ShareClient({ shared }: { shared: string }) {
+export default function ShareClient({shared}: {shared: string}) {
   const router = useRouter();
   const [state, setState] = useState<State>("idle");
-  const [msg, setMsg] = useState("");
-  const [keyInput, setKeyInput] = useState("");
-  const started = useRef(false);
-
+  const [message, setMessage] = useState("");
+  const controller = useRef<AbortController | null>(null);
+  const generation = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const run = async () => {
-    if (!shared.trim()) {
-      setState("nourl");
-      return;
-    }
-    if (!getEditKey()) {
-      setState("nokey");
-      return;
-    }
-    setState("saving");
+    if (controller.current) return;
+    if (!shared.trim()) { setState("nourl"); return; }
+    if (!getEditKey()) { setState("nokey"); return; }
+    setState("saving"); setMessage("");
+    const current = generation.current;
+    const pending = new AbortController(); controller.current = pending;
     try {
-      const res = await fetch("/api/web-save", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-edit-key": getEditKey() },
-        body: JSON.stringify({ url: shared }),
-      });
-      const r = await res.json().catch(() => null);
-      if (res.status === 409 && r?.id) {
-        setState("duplicate");
-        setMsg(r.title || "");
-        setTimeout(() => router.replace(`/recipe/${r.id}`), 1200);
-        return;
-      }
-      if (!res.ok) {
-        setState("error");
-        setMsg(res.status === 401 ? "مفتاح التحرير غير صحيح." : "تعذّر الحفظ.");
-        return;
-      }
-      setState("done");
-      setMsg(r.title || "");
-      setTimeout(() => router.replace(`/recipe/${r.id}`), 900);
-    } catch {
-      setState("error");
-      setMsg("تعذّر الاتصال.");
-    }
+      if (!hasEditKey()) await verifyEditKey(getEditKey());
+      if (current !== generation.current) return;
+      const result = await requestJson<{id: string; title?: string}>("/api/web-save", {...jsonBody({url: shared}), signal: pending.signal}, 310000);
+      if (current !== generation.current) return;
+      if (!result.id) throw new Error("وصل رد غير صالح. تحقق من المعرض قبل إعادة المحاولة.");
+      setState("done"); setMessage(result.title || "");
+      timer.current = setTimeout(() => router.replace(`/recipe/${result.id}`), 900);
+    } catch(e) {
+      if (current !== generation.current) return;
+      if (pending.signal.aborted) { setState("error"); setMessage("توقف الانتظار. قد يستمر الحفظ؛ تحقق من المعرض قبل إعادة المحاولة."); }
+      else if (e instanceof RequestError && e.status === 409 && e.data?.id) {
+        setState("duplicate"); setMessage("الوصفة موجودة بالفعل. جارٍ فتحها...");
+        timer.current = setTimeout(() => router.replace(`/recipe/${e.data.id}`), 900);
+      } else { setState(hasEditKey() ? "error" : "nokey"); setMessage(requestMessage(e)); }
+    } finally { if (controller.current === pending) controller.current = null; }
   };
-
   useEffect(() => {
-    if (started.current) return;
-    started.current = true;
     run();
+    return () => { generation.current++; controller.current?.abort(); controller.current = null; if (timer.current) clearTimeout(timer.current); };
+    // Start a new import only when the shared content changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  return (
-    <div className="container share-page">
-      <div className="share-card">
-        <div className="share-logo">🍽️</div>
-        {state === "saving" && (
-          <>
-            <div className="spinner" />
-            <h2>جاري حفظ الوصفة...</h2>
-            <p className="muted">نقرأ المنشور ونستخرج الوصفة — قد يستغرق حتى دقيقة.</p>
-          </>
-        )}
-        {state === "done" && (
-          <>
-            <div className="big-ok">✅</div>
-            <h2>تم الحفظ!</h2>
-            <p className="muted">{msg}</p>
-          </>
-        )}
-        {state === "duplicate" && (
-          <>
-            <div className="big-ok">ℹ️</div>
-            <h2>الوصفة محفوظة مسبقًا</h2>
-            <p className="muted">{msg}</p>
-            <p className="muted">لم تتم إضافة نسخة أخرى. جارٍ فتح الوصفة الأصلية…</p>
-          </>
-        )}
-        {state === "nourl" && (
-          <>
-            <h2>لم أجد رابطًا في المشاركة</h2>
-            <Link className="btn-primary" href="/">
-              الذهاب للمعرض
-            </Link>
-          </>
-        )}
-        {state === "nokey" && (
-          <>
-            <h2>فعّل وضع التحرير أولًا</h2>
-            <p className="muted">أدخل مفتاح التحرير مرة واحدة على هذا الجهاز.</p>
-            <input
-              type="password"
-              value={keyInput}
-              onChange={(e) => setKeyInput(e.target.value)}
-              placeholder="مفتاح التحرير"
-            />
-            <button
-              className="btn-primary"
-              onClick={() => {
-                setEditKey(keyInput.trim());
-                run();
-              }}
-            >
-              متابعة
-            </button>
-          </>
-        )}
-        {state === "error" && (
-          <>
-            <div className="big-ok">⚠️</div>
-            <h2>حدث خطأ</h2>
-            <p className="muted">{msg}</p>
-            <button className="btn-ghost" onClick={run}>
-              إعادة المحاولة
-            </button>
-            <Link className="btn-ghost" href="/">
-              المعرض
-            </Link>
-          </>
-        )}
-      </div>
-    </div>
-  );
+  }, [shared]);
+  const heading = state === "saving" ? "جاري حفظ الوصفة..." : state === "done" ? "تم الحفظ" : state === "duplicate" ? "الوصفة محفوظة مسبقًا" : state === "nokey" ? "فعّل وضع التحرير" : state === "nourl" ? "لم أجد رابطًا في المشاركة" : state === "error" ? "تعذّر الحفظ" : "تحضير المشاركة";
+  return <main id="main-content" className="container share-page"><div className="share-card">
+    <div className="share-logo" aria-hidden="true">🍽️</div>
+    <h1>{heading}</h1>
+    <div role="status">{message}</div>
+    {state === "saving" && <><div className="spinner" aria-hidden="true" /><p className="muted">قد يستغرق استخراج الوصفة حتى خمس دقائق.</p><button className="btn-ghost" onClick={() => controller.current?.abort()}>إيقاف الانتظار</button></>}
+    {state === "nokey" && <AccessForm onUnlocked={run} />}
+    {state === "error" && <button className="btn-primary" onClick={run}>إعادة المحاولة</button>}
+    <Link className="btn-ghost" href="/">العودة إلى الوصفات</Link>
+  </div></main>;
 }

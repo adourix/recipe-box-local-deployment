@@ -3,14 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { Recipe } from "@/lib/types";
+import { ImportProgress } from "./ImportProgress";
 import { CartLink } from "./CartLink";
 import { HeaderMenu } from "./HeaderMenu";
 import { Icon } from "./Icon";
-import { getEditKey, hasEditKey } from "@/lib/client";
+import { getEditKey, hasEditKey, requestUnlock } from "@/lib/client";
 import { arabicNormalize } from "@/lib/arabic";
 import { isDuplicateRecipe } from "@/lib/dedupe";
+import { requestJson, jsonBody, requestMessage, RequestError, validateImage } from "@/lib/request";
 import { toast } from "./Toast";
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -33,52 +35,61 @@ export default function GalleryClient({
   initialCollection?: string;
 }) {
   const router = useRouter();
-  const [q, setQ] = useState(initialQuery);
-  const [tags, setTags] = useState<string[]>(initialTag ? [initialTag] : []);
-  const [platform, setPlatform] = useState("");
-  const [status, setStatus] = useState("");
-  const [collection, setCollection] = useState(initialCollection);
-  const [onlyFav, setOnlyFav] = useState(false);
-  const [onlyCooked, setOnlyCooked] = useState(false);
-  const [sort, setSort] = useState<Sort>("newest");
+  const params = useSearchParams();
+  const [q, setQ] = useState(params.get("q") || initialQuery);
+  const [tags, setTags] = useState<string[]>(params.getAll("tag").length ? params.getAll("tag") : initialTag ? [initialTag] : []);
+  const [platform, setPlatform] = useState(params.get("platform") || "");
+  const [status, setStatus] = useState(params.get("status") || "");
+  const [collection, setCollection] = useState(params.get("collection") || initialCollection);
+  const [onlyFav, setOnlyFav] = useState(params.get("favorite") === "1");
+  const [onlyCooked, setOnlyCooked] = useState(params.get("cooked") === "1");
+  const [sort, setSort] = useState<Sort>((["newest", "oldest", "fastest", "az"].includes(params.get("sort") || "") ? params.get("sort") : "newest") as Sort);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showAllTags, setShowAllTags] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [canEdit, setCanEdit] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
   const [working, setWorking] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addUrl, setAddUrl] = useState("");
   const [adding, setAdding] = useState(false);
+  const [importError, setImportError] = useState("");
+  const importController = useRef<AbortController | null>(null);
+  useEffect(() => () => importController.current?.abort(), []);
+  useEffect(() => {
+    const next = new URLSearchParams();
+    if (q) next.set("q", q); tags.forEach(tag => next.append("tag", tag));
+    if (platform) next.set("platform", platform); if (status) next.set("status", status);
+    if (collection) next.set("collection", collection); if (onlyFav) next.set("favorite", "1");
+    if (onlyCooked) next.set("cooked", "1"); if (sort !== "newest") next.set("sort", sort);
+    const url = next.size ? `/?${next}` : "/";
+    if (window.location.pathname === "/" && window.location.pathname + window.location.search !== url) window.history.replaceState(window.history.state, "", url);
+  }, [q, tags, platform, status, collection, onlyFav, onlyCooked, sort]);
+  useEffect(() => {
+    const restore = () => { const p = new URLSearchParams(window.location.search);
+      setQ(p.get("q") || ""); setTags(p.getAll("tag")); setPlatform(p.get("platform") || ""); setStatus(p.get("status") || "");
+      setCollection(p.get("collection") || ""); setOnlyFav(p.get("favorite") === "1"); setOnlyCooked(p.get("cooked") === "1");
+      setSort((["newest", "oldest", "fastest", "az"].includes(p.get("sort") || "") ? p.get("sort") : "newest") as Sort);
+    };
+    window.addEventListener("popstate", restore); return () => window.removeEventListener("popstate", restore);
+  }, []);
   const photoRef = useRef<HTMLInputElement>(null);
 
   const addByLink = async () => {
+    if (adding || working) return;
     const url = addUrl.trim();
-    if (!url) return;
-    if (!hasEditKey()) {
-      toast("فعّل وضع التحرير أولًا (زر القفل).", "error");
-      return;
-    }
-    setAdding(true);
-    toast("جاري حفظ الوصفة...");
+    try { if (!["http:", "https:"].includes(new URL(url).protocol)) throw new Error(); }
+    catch { setImportError("أدخل رابطًا صحيحًا يبدأ بـ https://"); return; }
+    if (!hasEditKey()) { requestUnlock(); return; }
+    setImportFile(null); setAdding(true); setImportError(""); importController.current = new AbortController();
     try {
-      const res = await fetch("/api/web-save", {
-        method: "POST",
-        headers: { "content-type": "application/json", "x-edit-key": getEditKey() },
-        body: JSON.stringify({ url }),
-      });
-      const result = await res.json().catch(() => null);
-      if (res.ok) {
-        setAddUrl("");
-        setAddOpen(false);
-        router.push(`/recipe/${result.id}`);
-      } else if (res.status === 409 && result?.id) {
-        setAddUrl("");
-        setAddOpen(false);
-        toast("هذه الوصفة محفوظة مسبقًا — لم تتم إضافة نسخة أخرى.", "success");
-        router.push(`/recipe/${result.id}`);
-      } else toast("تعذّر حفظ الرابط.", "error");
-    } finally {
-      setAdding(false);
-    }
+      const result = await requestJson<{id: string}>("/api/web-save", {...jsonBody({url}), signal: importController.current.signal}, 310000);
+      if (!result.id) throw new Error("وصل رد غير صالح. تحقق من المعرض قبل إعادة المحاولة.");
+      setAddUrl(""); setAddOpen(false); router.push(`/recipe/${result.id}`);
+    } catch(e) {
+      if (e instanceof RequestError && e.status === 409 && e.data?.id) { toast("الوصفة محفوظة مسبقًا.", "success"); router.push(`/recipe/${e.data.id}`); }
+      else setImportError(requestMessage(e));
+    } finally { setAdding(false); importController.current = null; }
   };
 
   useEffect(() => {
@@ -185,47 +196,31 @@ export default function GalleryClient({
   };
 
   const onPhoto = async (file: File) => {
-    if (!hasEditKey()) {
-      toast("فعّل وضع التحرير أولًا (زر القفل).", "error");
-      return;
-    }
-    setWorking("جاري قراءة الصورة واستخراج الوصفة...");
-    const fd = new FormData();
-    fd.append("file", file);
-    const res = await fetch("/api/photo-save", {
-      method: "POST", headers: { "x-edit-key": getEditKey() }, body: fd,
-    }).catch(() => null);
-    const result = res ? await res.json().catch(() => null) : null;
-    if (res && res.ok) {
+    if (adding || working) return;
+    if (!hasEditKey()) { requestUnlock(); return; }
+    try { validateImage(file, 12); } catch(e) { setImportError(requestMessage(e)); return; }
+    setImportFile(file); setWorking("جاري قراءة الصورة واستخراج الوصفة..."); setImportError("");
+    importController.current = new AbortController();
+    const form = new FormData(); form.append("file", file);
+    try {
+      const result = await requestJson<{id: string}>("/api/photo-save", {method: "POST", body: form, signal: importController.current.signal}, 310000);
+      if (!result.id) throw new Error("وصل رد غير صالح. تحقق من المعرض قبل إعادة المحاولة.");
       router.push(`/recipe/${result.id}`);
-    } else if (res?.status === 409 && result?.id) {
-      setWorking(null);
-      toast("هذه الوصفة محفوظة مسبقًا — لم تتم إضافة نسخة أخرى.", "success");
-      router.push(`/recipe/${result.id}`);
-    } else {
-      setWorking(null);
-      toast("تعذّرت قراءة الصورة.", "error");
-    }
+    } catch(e) {
+      if (e instanceof RequestError && e.status === 409 && e.data?.id) { toast("الوصفة محفوظة مسبقًا.", "success"); router.push(`/recipe/${e.data.id}`); }
+      else setImportError(requestMessage(e));
+    } finally { setWorking(null); importController.current = null; }
   };
 
   const exportBackup = async () => {
-    if (!hasEditKey()) {
-      toast("فعّل وضع التحرير أولًا (زر القفل).", "error");
-      return;
-    }
-    const res = await fetch("/api/export", { headers: { "x-edit-key": getEditKey() } });
-    if (!res.ok) {
-      toast("تعذّر التصدير.", "error");
-      return;
-    }
-    const data = await res.json();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `recipes-backup-${data.length || ""}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (!hasEditKey()) { requestUnlock(); return; }
+    try {
+      const data = await requestJson<Recipe[]>("/api/export");
+      if (!Array.isArray(data)) throw new Error("تعذّر قراءة النسخة الاحتياطية.");
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], {type: "application/json"}));
+      const a = document.createElement("a"); a.href = url; a.download = `recipes-backup-${data.length}.json`; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000); toast("تم تنزيل النسخة الاحتياطية.", "success");
+    } catch(e) { toast(requestMessage(e), "error"); }
   };
 
   const reviewCount = recipes.filter((r) => r.status === "needs_review").length;
@@ -233,14 +228,6 @@ export default function GalleryClient({
 
   return (
     <div className="container">
-      {working && (
-        <div className="overlay">
-          <div className="overlay-box">
-            <Icon name="refresh" size={22} className="spin" />
-            <span>{working}</span>
-          </div>
-        </div>
-      )}
       <header className="topbar">
         <div className="brand">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -251,21 +238,18 @@ export default function GalleryClient({
           </div>
         </div>
         <div className="header-actions">
-          <button className="btn-primary add-btn" onClick={() => setAddOpen((o) => !o)}>
+          <button aria-expanded={addOpen} className="btn-primary add-btn" disabled={adding || !!working} onClick={() => setAddOpen((o) => !o)}>
             <Icon name="plus" size={18} /> إضافة
           </button>
           <CartLink />
           <HeaderMenu
             actions={[
-              { icon: "plus", label: "إضافة برابط", onClick: () => setAddOpen(true) },
-              { icon: "camera", label: "إضافة من صورة", onClick: () => photoRef.current?.click() },
-              { icon: "dice", label: "وصفة عشوائية", onClick: surprise },
               { icon: "download", label: "نسخة احتياطية (تصدير)", onClick: exportBackup },
             ]}
           />
         </div>
         <input
-          ref={photoRef} type="file" accept="image/*" hidden
+          ref={photoRef} type="file" accept="image/jpeg,image/png,image/webp" hidden
           onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) onPhoto(f);
@@ -274,18 +258,23 @@ export default function GalleryClient({
         />
       </header>
 
-      <main>
+      <main id="main-content">
+
       {addOpen && (
-        <div className="add-bar">
-          {adding ? (
-            <div className="add-loading">
-              <Icon name="refresh" size={18} className="spin" />
-              <span>جاري استخراج الوصفة... قد يستغرق حتى دقيقة</span>
-            </div>
+        <section className="add-panel" aria-label="إضافة وصفة">
+          <div className="section-head"><h2>أضف وصفة إلى كتابك</h2><button className="icon-btn" aria-label="إغلاق الإضافة" disabled={adding || !!working} onClick={() => setAddOpen(false)}><Icon name="x" size={18} /></button></div>
+          <p className="helper-text">ألصق رابطًا أو اختر صورة JPG أو PNG أو WebP حتى 12 ميجابايت.</p>
+          {importError && <p className="field-error" role="alert">{importError}</p>}
+          {!canEdit && <p className="note">فعّل التحرير لحفظ الوصفات. <button className="link-btn" onClick={requestUnlock}>تفعيل التحرير</button></p>}
+          <div className="add-bar">
+          {adding || working ? (
+            <ImportProgress file={importFile} onCancel={() => importController.current?.abort()} />
           ) : (
             <>
               <span className="add-icon"><Icon name="link" size={18} /></span>
               <input
+                aria-label="رابط الوصفة"
+                dir="ltr"
                 type="url"
                 value={addUrl}
                 onChange={(e) => setAddUrl(e.target.value)}
@@ -293,19 +282,21 @@ export default function GalleryClient({
                 autoFocus
                 onKeyDown={(e) => e.key === "Enter" && addByLink()}
               />
-              <button className="btn-primary" onClick={addByLink}>
+              <button className="btn-primary" disabled={!canEdit || !addUrl.trim()} onClick={addByLink}>
                 حفظ
               </button>
             </>
           )}
         </div>
+          <button className="btn-ghost" disabled={!canEdit || adding || !!working} onClick={() => photoRef.current?.click()}><Icon name="camera" size={18} /> استيراد من صورة</button>
+        </section>
       )}
 
       <div className="toolbar">
         <div className="search">
           <span className="search-icon"><Icon name="search" size={18} /></span>
           <input
-            type="text" value={q} onChange={(e) => setQ(e.target.value)}
+            aria-label="البحث في الوصفات" type="search" value={q} onChange={(e) => setQ(e.target.value)}
             placeholder="ابحث بالاسم، الوسم، أو المكوّن..." autoComplete="off"
           />
           {q && (
@@ -316,12 +307,21 @@ export default function GalleryClient({
         </div>
 
         <div className="filters-row">
-          <button className={`chip-toggle ${onlyFav ? "active" : ""}`} onClick={() => setOnlyFav((f) => !f)}>
+          <button className="chip-toggle" onClick={surprise} disabled={!recipes.length}><Icon name="dice" size={16} /> اختر لي وصفة</button>
+          <button aria-pressed={onlyFav} className={`chip-toggle ${onlyFav ? "active" : ""}`} onClick={() => setOnlyFav((f) => !f)}>
             <Icon name={onlyFav ? "heartFilled" : "heart"} size={16} /> المفضلة
           </button>
-          <button className={`chip-toggle ${onlyCooked ? "active" : ""}`} onClick={() => setOnlyCooked((c) => !c)}>
+          <button aria-pressed={onlyCooked} className={`chip-toggle ${onlyCooked ? "active" : ""}`} onClick={() => setOnlyCooked((c) => !c)}>
             <Icon name="check" size={16} /> طبختها
           </button>
+          <button className={`chip-toggle ${filtersOpen ? "active" : ""}`} aria-expanded={filtersOpen} aria-controls="advanced-filters" onClick={() => setFiltersOpen(!filtersOpen)}><Icon name="search" size={16} /> تصفية الوصفات{activeFilters ? ` (${activeFilters})` : ""}</button>
+          <select aria-label="ترتيب الوصفات" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
+            <option value="newest">الأحدث أولًا</option><option value="oldest">الأقدم أولًا</option><option value="fastest">الأسرع تحضيرًا</option><option value="az">أبجدي</option>
+          </select>
+          {activeFilters > 0 && <button className="link-btn" onClick={clearAll}>مسح الفلاتر ({activeFilters})</button>}
+        </div>
+        <div id="advanced-filters" hidden={!filtersOpen}>
+        <div className="filters-row">
           {collections.length > 0 && (
             <select aria-label="تصفية حسب المجموعة" value={collection} onChange={(e) => setCollection(e.target.value)}>
               <option value="">كل المجموعات</option>
@@ -337,25 +337,15 @@ export default function GalleryClient({
           <select aria-label="تصفية حسب الحالة" value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">كل الحالات</option>
             <option value="ok">مكتملة</option>
+            <option value="fetch_failed">تعذّر الاستيراد</option>
             <option value="needs_review">بحاجة لمراجعة{reviewCount ? ` (${reviewCount})` : ""}</option>
           </select>
-          <select aria-label="ترتيب الوصفات" value={sort} onChange={(e) => setSort(e.target.value as Sort)}>
-            <option value="newest">الأحدث</option>
-            <option value="oldest">الأقدم</option>
-            <option value="fastest">الأسرع تحضيرًا</option>
-            <option value="az">أبجدي</option>
-          </select>
-          {activeFilters > 0 && (
-            <button className="chip-toggle clear" onClick={clearAll}>
-              <Icon name="x" size={15} /> مسح ({activeFilters})
-            </button>
-          )}
         </div>
 
         {allTags.length > 0 && (
           <div className="tag-cloud">
             {visibleTags.map((t) => (
-              <button key={t} className={`tag-pill ${tags.includes(t) ? "active" : ""}`} onClick={() => toggleTag(t)}>
+              <button key={t} aria-pressed={tags.includes(t)} className={`tag-pill ${tags.includes(t) ? "active" : ""}`} onClick={() => toggleTag(t)}>
                 {t}
               </button>
             ))}
@@ -368,13 +358,14 @@ export default function GalleryClient({
         )}
       </div>
 
-      <div className="results-meta">{filtered.length} من {recipes.length} وصفة</div>
+      </div>
+      <div className="results-meta" role="status" aria-live="polite">{filtered.length} من {recipes.length} وصفة</div>
 
       {filtered.length === 0 ? (
         <div className="empty">
           <div className="big"><Icon name="utensils" size={48} /></div>
           {recipes.length === 0 ? (
-            <p>لا توجد وصفات بعد. أرسل رابط وصفة إلى بوت تيليجرام لتظهر هنا.</p>
+            <><h2>كتابك يبدأ بوصفة واحدة</h2><p>احفظ رابط وصفة أو استورد صورة لتجدها هنا.</p><button className="btn-primary" onClick={() => setAddOpen(true)}>إضافة أول وصفة</button></>
           ) : (
             <p>لا نتائج مطابقة. <button className="link-btn" onClick={clearAll}>مسح الفلاتر</button></p>
           )}
@@ -393,10 +384,10 @@ export default function GalleryClient({
                       {r.image_url ? (
                         <Image
                           src={r.image_url}
-                          alt={title}
+                          alt=""
                           fill
-                          sizes="(max-width:600px) 45vw, 230px"
-                          quality={55}
+                          sizes="(max-width:600px) 45vw, (max-width:900px) 30vw, 260px"
+
                           priority={index === 0}
                           fetchPriority={index === 0 ? "high" : "auto"}
                           className="card-thumb"
@@ -406,7 +397,7 @@ export default function GalleryClient({
                         <div className="card-thumb placeholder"><Icon name="hat" size={40} /></div>
                       )}
                       <div className="badges-top">
-                        {r.status === "needs_review" && <span className="review-badge">بحاجة لمراجعة</span>}
+                        {r.status !== "ok" && <span className="review-badge">{r.status === "needs_review" ? "بحاجة لمراجعة" : "تعذّر الاستيراد"}</span>}
                         {r.cooked && <span className="cooked-badge"><Icon name="check" size={12} /> طبختها</span>}
                         {duplicateRecipeIds.has(r.id) && <span className="dup-badge">مكرر؟</span>}
                       </div>

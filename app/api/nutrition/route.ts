@@ -9,10 +9,21 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Backfill: estimate nutrition for recipes that don't have it yet.
 export async function POST(req: NextRequest) {
-  if (req.headers.get("x-edit-key") !== process.env.EDIT_KEY) {
+  if (!process.env.EDIT_KEY || req.headers.get("x-edit-key") !== process.env.EDIT_KEY) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const body = await req.json().catch(() => null);
+  // Preview uses the current editor draft and never writes to the database.
+  if (body?.draft) {
+    const {title, ingredients, servings} = body.draft;
+    if (typeof title !== "string" || !Array.isArray(ingredients) || !ingredients.length || ingredients.length > 200 || ingredients.some((i: unknown) => typeof i !== "string" || i.length > 2000)) {
+      return NextResponse.json({error: "ingredients required"}, {status: 400});
+    }
+    try {
+      const nutrition = await estimateNutrition(title, ingredients, typeof servings === "string" ? servings : null);
+      return nutrition ? NextResponse.json({nutrition}) : NextResponse.json({error: "estimate unavailable"}, {status: 503});
+    } catch { return NextResponse.json({error: "estimate unavailable"}, {status: 503}); }
+  }
   const force = body?.force === true;
   const sb = supabaseAdmin();
 

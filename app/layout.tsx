@@ -11,8 +11,8 @@ const isVercel = process.env.VERCEL === "1";
 
 const tajawal = Tajawal({
   subsets: ["arabic"],
-  weight: ["400", "700"],
-  display: "optional",
+  weight: ["400", "500", "700"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -56,6 +56,7 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
       </head>
       <body className={tajawal.className}>
+        <a className="skip-link" href="#main-content">انتقل إلى المحتوى</a>
         {children}
         <ToastHost />
         <RegisterSW />
