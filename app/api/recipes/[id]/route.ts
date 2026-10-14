@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { recipeImagePublicUrl } from "@/lib/storage-url";
 import { sectionizeIngredients } from "@/lib/gemini";
 import { normalizeQuantity } from "@/lib/scale";
 
@@ -154,7 +155,7 @@ export async function PATCH(
     uploadedPath = `${id}-${crypto.randomUUID()}.${ext}`;
     const {error} = await sb.storage.from("recipe-images").upload(uploadedPath, Buffer.from(await image.arrayBuffer()), {contentType: image.type});
     if (error) return NextResponse.json({error: "image upload failed"}, {status: 500});
-    update.image_url = sb.storage.from("recipe-images").getPublicUrl(uploadedPath).data.publicUrl;
+    update.image_url = recipeImagePublicUrl(uploadedPath);
   }
   const { data, error } = await sb
     .from("recipes")
