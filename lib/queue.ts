@@ -134,7 +134,7 @@ export async function purgeOldJobs(): Promise<void> {
 
 /** Fire the worker endpoint (returns immediately; it processes in the background). */
 export async function triggerWorker(): Promise<void> {
-  const base = (process.env.APP_BASE_URL || "").replace(/\/$/, "");
+  const base = (process.env.INTERNAL_APP_URL || process.env.APP_BASE_URL || "").replace(/\/$/, "");
   if (!base) return;
   try {
     await fetchWithTimeout(`${base}/api/worker`, {
