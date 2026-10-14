@@ -22,7 +22,7 @@ sudo docker compose ps
 sudo docker compose config --services
 ```
 
-The Recipe Box container reaches the gateway at `http://api-gw:8000`. Browsers cannot resolve this internal Docker name, so `SUPABASE_PUBLIC_URL` and `NEXT_PUBLIC_SUPABASE_URL` must use the host IP or hostname that is reachable from the device opening the website. For this server's LAN, the example is `http://192.168.1.254:8000`; change it if your server IP differs. For remote use, create a dedicated public Supabase hostname and proxy it to port 8000, or use another securely reachable address.
+The Recipe Box container reaches the gateway at `http://api-gw:8000`. Browsers cannot resolve this internal Docker name, so `SUPABASE_PUBLIC_URL` and `NEXT_PUBLIC_SUPABASE_URL` must use the host IP or hostname that is reachable from the device opening the website. For this server's LAN, the example is `http://192.168.1.254:8000`; change it if your server IP differs. These `NEXT_PUBLIC_*` values are embedded into the client bundle at image-build time, so set them in `.env` before `docker compose build`; rebuild the image if they change. For remote use, create a dedicated public Supabase hostname and proxy it to port 8000, or use another securely reachable address.
 
 ## 2. Apply the database schema
 
