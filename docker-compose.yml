@@ -13,8 +13,8 @@ services:
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3004}
       INTERNAL_APP_URL: ${INTERNAL_APP_URL:-http://127.0.0.1:3000}
       SUPABASE_URL: ${SUPABASE_URL:-http://api-gw:8000}
-      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-http://localhost:8000}
-      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL:-http://localhost:8000}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-http://192.168.1.254:8000}
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL:-http://192.168.1.254:8000}
       RESOLVER_URL: ${RESOLVER_URL:-http://recipe-resolver:8081}
     ports:
       - "127.0.0.1:3004:3000"
