@@ -75,13 +75,13 @@ sudo docker compose ps
 sudo docker compose logs -f app recipe-resolver
 ```
 
-For a local health check on the server:
+Run a local health check on the server:
 
 ```bash
 curl -I http://127.0.0.1:3004
 ```
 
-Then open `http://192.168.1.254:3004` from a device on the same LAN (replace the IP if needed). The host port is intentionally bound to loopback for reverse-proxy use; direct LAN access requires changing that bind to `3004:3000` or going through Nginx.
+The Recipe Box port is intentionally bound to loopback for reverse-proxy use, so it is not directly accessible from another LAN device. Configure the Nginx virtual host in the next section, then open the recipes hostname from your browser.
 
 ## 5. Nginx and Cloudflare Tunnel
 
