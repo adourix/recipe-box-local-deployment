@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { waitUntil } from "@vercel/functions";
+import { runInBackground } from "@/lib/background";
 import { extractUrls, processVideo, processPhoto, searchRecipes } from "@/lib/pipeline";
 import { sendMessage, escapeHtml } from "@/lib/telegram";
 import { enqueueJob, triggerWorker, queueStatus } from "@/lib/queue";
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
         chatId,
         `📊 الطابور:\n• قيد الانتظار: ${s.pending}\n• قيد المعالجة: ${s.processing}\n\n⏳ سأحرّك المعالجة الآن...`
       );
-      waitUntil(triggerWorker());
+      runInBackground(triggerWorker());
     } else {
       await sendMessage(chatId, "✅ الطابور فارغ — كل الوصفات تمت معالجتها.");
     }
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest) {
   const img = photo || photoDoc;
   if (img?.file_id) {
     await sendMessage(chatId, "⏳ جاري قراءة الوصفة من الصورة...");
-    waitUntil(
+    runInBackground(
       processPhoto({ fileId: img.file_id, chatId, caption: msg?.caption }).catch(async (e) => {
         console.error("processPhoto failed", e);
         await sendMessage(chatId, "⚠️ حدث خطأ أثناء قراءة الصورة.");
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest) {
       chatId,
       "⏳ جاري تحليل الفيديو واستخراج الوصفة... قد يستغرق حتى دقيقة."
     );
-    waitUntil(
+    runInBackground(
       processVideo({
         fileId: video.file_id,
         thumbFileId,
@@ -143,7 +143,7 @@ export async function POST(req: NextRequest) {
       ? "⏳ جاري حفظ الوصفة..."
       : `⏳ أضفت ${urls.length} روابط للطابور، سأرسل كل وصفة عند جهوزها.`
   );
-  waitUntil(triggerWorker());
+  runInBackground(triggerWorker());
 
   return NextResponse.json({ ok: true });
 }
