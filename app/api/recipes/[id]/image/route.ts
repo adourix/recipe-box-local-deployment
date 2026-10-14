@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase";
+import { recipeImagePublicUrl } from "@/lib/storage-url";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -42,7 +43,7 @@ export async function POST(
     console.error("image upload failed", upErr);
     return NextResponse.json({ error: upErr.message }, { status: 500 });
   }
-  const publicUrl = sb.storage.from("recipe-images").getPublicUrl(path).data.publicUrl;
+  const publicUrl = recipeImagePublicUrl(path);
 
   const { error } = await sb
     .from("recipes")
