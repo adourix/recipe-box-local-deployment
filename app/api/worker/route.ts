@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { waitUntil } from "@vercel/functions";
+import { runInBackground } from "@/lib/background";
 import { saveFromUrl, sendSaveResult } from "@/lib/pipeline";
 import { sendMessage } from "@/lib/telegram";
 import {
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, skipped: "locked" });
   }
 
-  waitUntil(
+  runInBackground(
     (async () => {
       const deadline = Date.now() + BUDGET_MS;
       await purgeOldJobs().catch(() => {});
