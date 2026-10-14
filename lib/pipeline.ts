@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "./supabase";
+import { recipeImagePublicUrl } from "./storage-url";
 import {
   extractRecipe,
   extractRecipeFromVideo,
@@ -427,7 +428,7 @@ async function uploadImageBuffer(
       console.error("storage upload failed", error);
       return null;
     }
-    return sb.storage.from("recipe-images").getPublicUrl(path).data.publicUrl;
+    return recipeImagePublicUrl(path);
   } catch (e) {
     console.error("uploadImageBuffer failed", e);
     return null;
