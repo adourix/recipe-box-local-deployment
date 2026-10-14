@@ -41,10 +41,24 @@ create table if not exists public.jobs (
     check (status in ('pending', 'processing', 'done', 'error')),
   attempts integer not null default 0,
   error text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 create index if not exists jobs_status_created_idx on public.jobs (status, created_at);
 create index if not exists jobs_url_created_idx on public.jobs (url, created_at desc);
+
+create or replace function public.set_updated_at()
+returns trigger language plpgsql as $
+begin
+  new.updated_at = now();
+  return new;
+end;
+$;
+
+drop trigger if exists jobs_set_updated_at on public.jobs;
+create trigger jobs_set_updated_at
+before update on public.jobs
+for each row execute function public.set_updated_at();
 
 create table if not exists public.worker_lock (
   id integer primary key check (id = 1),
