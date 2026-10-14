@@ -59,7 +59,14 @@ export async function queueStatus(): Promise<{ pending: number; processing: numb
 /** Reset orphaned 'processing' jobs (worker died mid-job) back to pending.
  * Safe to call only while holding the worker lock (we're the sole worker). */
 export async function reclaimStale(): Promise<void> {
-  await supabaseAdmin().from("jobs").update({ status: "pending" }).eq("status", "processing");
+  // Recover only jobs whose last update is older than the lease window. This
+  // prevents a second worker from resetting a job while the first is active.
+  const cutoff = new Date(Date.now() - LEASE_MS).toISOString();
+  await supabaseAdmin()
+    .from("jobs")
+    .update({ status: "pending", updated_at: new Date().toISOString() })
+    .eq("status", "processing")
+    .lt("updated_at", cutoff);
 }
 
 /** Acquire the single global worker lease. Returns true if we own it. */
@@ -100,7 +107,7 @@ export async function claimNextJob(): Promise<Job | null> {
   if (!job) return null;
   const { data: upd } = await sb
     .from("jobs")
-    .update({ status: "processing" })
+    .update({ status: "processing", updated_at: new Date().toISOString() })
     .eq("id", job.id)
     .eq("status", "pending")
     .select("id");
@@ -108,11 +115,11 @@ export async function claimNextJob(): Promise<Job | null> {
 }
 
 export async function markJobDone(id: string): Promise<void> {
-  await supabaseAdmin().from("jobs").update({ status: "done" }).eq("id", id);
+  await supabaseAdmin().from("jobs").update({ status: "done", updated_at: new Date().toISOString() }).eq("id", id);
 }
 
 export async function markJobError(id: string, msg: string): Promise<void> {
-  await supabaseAdmin().from("jobs").update({ status: "error", error: msg.slice(0, 300) }).eq("id", id);
+  await supabaseAdmin().from("jobs").update({ status: "error", error: msg.slice(0, 300), updated_at: new Date().toISOString() }).eq("id", id);
 }
 
 /** Housekeeping: drop finished jobs older than a day. */
