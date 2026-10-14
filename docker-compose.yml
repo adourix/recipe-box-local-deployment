@@ -1,0 +1,52 @@
+name: recipe-box
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: recipe-box-app
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      SUPABASE_URL: ${SUPABASE_URL:-http://kong:8000}
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-http://localhost:8000}
+      RESOLVER_URL: ${RESOLVER_URL:-http://recipe-resolver:8081}
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      recipe-resolver:
+        condition: service_healthy
+    networks:
+      - recipe-internal
+      - supabase_default
+
+  recipe-resolver:
+    build:
+      context: ./services/recipe-resolver
+    container_name: recipe-box-resolver
+    restart: unless-stopped
+    environment:
+      PORT: "8081"
+      RESOLVER_SECRET: ${RESOLVER_SECRET:?Set RESOLVER_SECRET in .env}
+      RESOLVER_COOKIES: ${RESOLVER_COOKIES:-}
+    expose:
+      - "8081"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    networks:
+      - recipe-internal
+    init: true
+
+networks:
+  recipe-internal:
+    name: recipe-box-internal
+  supabase_default:
+    external: true
+    name: recipe-supabase_default
