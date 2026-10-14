@@ -22,6 +22,8 @@ services:
     networks:
       - recipe-internal
       - supabase_default
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   recipe-resolver:
     build:
