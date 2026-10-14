@@ -1,6 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  output: "standalone",
   images: {
     // ponytail: Vercel's free image-transformation quota ran out. Images already
     // live sized in Supabase Storage, so serve them straight.
