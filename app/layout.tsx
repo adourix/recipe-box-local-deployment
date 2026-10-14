@@ -13,7 +13,7 @@ const tajawal = Tajawal({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://recipes.amirshetaia.com"),
+  metadataBase: new URL(process.env.APP_BASE_URL || "http://localhost:3004"),
   title: "كتاب وصفات أمير",
   description: "وصفاتي المحفوظة من انستغرام وفيسبوك",
   manifest: "/manifest.webmanifest",
