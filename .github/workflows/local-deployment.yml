@@ -1,0 +1,37 @@
+name: Local deployment CI
+
+on:
+  push:
+    branches: [local-deployment]
+  pull_request:
+    branches: [local-deployment]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      APP_BASE_URL: "http://localhost:3004"
+      INTERNAL_APP_URL: "http://127.0.0.1:3000"
+      SUPABASE_URL: "http://localhost:8000"
+      NEXT_PUBLIC_SUPABASE_URL: "http://localhost:8000"
+      SUPABASE_PUBLIC_URL: "http://localhost:8000"
+      SUPABASE_SERVICE_ROLE_KEY: "ci-placeholder"
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: "ci-placeholder"
+      EDIT_KEY: "ci-placeholder"
+      CRON_SECRET: "ci-placeholder"
+      TELEGRAM_WEBHOOK_SECRET: "ci-placeholder"
+      WORKER_SECRET: "ci-placeholder"
+      RESOLVER_SECRET: "ci-placeholder"
+      GEMINI_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
