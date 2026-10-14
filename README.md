@@ -2,114 +2,114 @@
 
 Personal Arabic recipe manager. Share a social-media link, video, photo, or text with Telegram to extract and save recipes in Arabic, then browse/search the recipe gallery.
 
-This branch adds a self-hosted deployment path. The original `main` branch and its hosted deployment instructions remain unchanged.
+This branch adds the self-hosted deployment path; `main` is left unchanged.
 
 ## Components
 
-- **Recipe Box:** Next.js 15 app, published on host loopback port `3004`.
-- **Supabase:** use the separate self-hosted Supabase Docker stack in `~/projects/recipe-supabase` (Postgres, PostgREST, Storage, and API gateway). Apply the migration in `supabase/migrations` to that database.
-- **Recipe Resolver:** local Python/yt-dlp service, accessible only over the internal Docker network.
-- **Gemini:** external API used for recipe extraction; set `GEMINI_API_KEY`.
-- **Telegram:** optional; configure a bot and webhook to use link/photo/video capture.
+- **Recipe Box:** Next.js app in Docker, bound to host loopback port `3004`.
+- **Supabase:** existing self-hosted Supabase Docker stack in `~/projects/recipe-supabase`. Keep it separate; this repository does not launch a second database or storage server.
+- **Recipe Resolver:** local Python/yt-dlp service, only reachable from the internal Docker network.
+- **Gemini:** external API used for recipe extraction; `GEMINI_API_KEY` is required to extract recipes.
+- **Telegram:** optional. Configure a bot and a public HTTPS webhook for bot-based capture.
 
-## Important networking note
+## 1. Start and check the existing Supabase stack
 
-The app container must reach the Supabase API gateway. If your Supabase gateway is published on the Debian host at port `54321`, set `SUPABASE_URL=http://host.docker.internal:54321` and ensure the app container resolves `host.docker.internal` to the host gateway. On Linux Docker Compose, add this to the `app` service if it is not already configured:
-
-```yaml
-extra_hosts:
-  - "host.docker.internal:host-gateway"
-```
-
-The browser-facing `NEXT_PUBLIC_SUPABASE_URL` must be reachable from the browser device. For use on the same machine set it to `http://localhost:54321`; for LAN access use the Debian server's LAN IP and port. For Cloudflare Tunnel, use your public hostname only after the local setup works.
-
-## 1. Configure the Supabase stack
-
-Start the separate Supabase Compose stack first, and ensure the gateway is listening on host port `54321`. Do not start duplicate Postgres or Storage services from this repository.
-
-Apply the schema migration to the Supabase database (using the Supabase SQL editor, `psql`, or your existing migration workflow):
+Start the existing stack from its own directory first. It must have an API gateway service called `api-gw`, reachable from the Docker network `recipe-supabase_default`, and published on the host at port `8000` (change ports below if your `.env` uses another value).
 
 ```bash
-psql "$LOCAL_SUPABASE_DB_URL" -v ON_ERROR_STOP=1 \
-  -f supabase/migrations/20261014000100_initial_schema.sql
+cd ~/projects/recipe-supabase
+sudo docker compose ps
+sudo docker compose config --services
 ```
 
-Replace `$LOCAL_SUPABASE_DB_URL` with the connection string for the self-hosted Supabase Postgres database. Do not use an anon key for direct SQL.
+The Recipe Box container reaches the gateway at `http://api-gw:8000`. Browsers cannot resolve this internal Docker name, so `SUPABASE_PUBLIC_URL` and `NEXT_PUBLIC_SUPABASE_URL` must use the host IP or hostname that is reachable from the device opening the website. For this server's LAN, the example is `http://192.168.1.254:8000`; change it if your server IP differs. For remote use, create a dedicated public Supabase hostname and proxy it to port 8000, or use another securely reachable address.
 
-The migration creates `recipes`, `jobs`, `worker_lock`, and `app_kv`, and the public `recipe-images` Storage bucket. It preserves private recipe notes by excluding `notes` from anon column grants.
+## 2. Apply the database schema
 
-Your Supabase API keys must match the JWT secret and generated anon/service role keys in the Supabase `.env`. Do not invent keys or copy the example placeholders.
-
-## 2. Configure Recipe Box
+From the Recipe Box repository root, apply the migration to the existing Supabase Postgres container. It creates the app-specific tables, the public `recipe-images` bucket, and grants public access to gallery fields while excluding private `notes`.
 
 ```bash
+cd ~/projects/recipe-box-local-deployment
+sudo docker compose -f ~/projects/recipe-supabase/docker-compose.yml exec -T db \
+  psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+  < supabase/migrations/20261014000100_initial_schema.sql
+```
+
+If your Supabase compose file has a different location or the Postgres user/database differs, adapt those values. Do not run the migration against a production/external database by mistake.
+
+The migration is safe to re-run for its tables, indexes, trigger and bucket. It does not copy recipes from the original hosted Supabase database.
+
+## 3. Configure Recipe Box
+
+```bash
+cd ~/projects
 git clone https://github.com/adourix/recipe-box-local-deployment.git
 cd recipe-box-local-deployment
 git checkout local-deployment
 cp .env.example .env
-```
-
-Open `.env` and set:
-- `SUPABASE_URL`: API gateway URL that is reachable **from the app container**.
-- `NEXT_PUBLIC_SUPABASE_URL`: API gateway URL reachable **from the browser**.
-- `SUPABASE_SERVICE_ROLE_KEY` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`: keys generated for your own Supabase deployment.
-- `GEMINI_API_KEY`: Gemini API key, required for extraction.
-- `RESOLVER_SECRET`: same long random secret for Recipe Box and the resolver.
-- `EDIT_KEY` and `CRON_SECRET`: separate random secrets.
-- Telegram values only when enabling Telegram.
-
-Generate app secrets without printing them:
-
-```bash
 bash scripts/generate-local-keys.sh
 ```
 
-The script writes missing/replacement secrets to `.env` and sets file permissions to owner-only. It does not generate Supabase JWT/API keys.
+Edit `.env` before building. Required values:
 
-## 3. Start the app and resolver
+- `SUPABASE_URL=http://api-gw:8000`: internal URL, used by the app container.
+- `SUPABASE_PUBLIC_URL` and `NEXT_PUBLIC_SUPABASE_URL`: browser-reachable host/IP or HTTPS hostname for the Supabase API. These must not be `api-gw`.
+- `SUPABASE_SERVICE_ROLE_KEY` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`: use the generated service-role and anon keys from the existing Supabase `.env`. Never use the example placeholders.
+- `GEMINI_API_KEY`: required for recipe extraction.
+- `RESOLVER_SECRET`, `EDIT_KEY`, and `CRON_SECRET`: generated by the script as separate random values. The resolver secret is passed to both Recipe Box and the resolver.
+- Telegram values are only required when enabling the bot.
 
-Make sure the existing Supabase Compose network is named `recipe-supabase_default`; adjust the external network name in `docker-compose.yml` if your Compose project uses a different name.
+Set `APP_BASE_URL` to the URL that users will open. For LAN testing, for example, `http://192.168.1.254:3004`. Set `INTERNAL_APP_URL=http://127.0.0.1:3000`; this container-internal URL is used to kick the worker without going through Cloudflare or Nginx.
+
+The key-generation script only generates app secrets. It does not generate the Supabase JWT/API keys.
+
+## 4. Start the app
+
+Make sure the Docker Compose network created by the existing Supabase stack is named `recipe-supabase_default`; update the external network name in `docker-compose.yml` if you chose another project name.
 
 ```bash
-docker compose build
-docker compose up -d
-docker compose ps
-docker compose logs -f app recipe-resolver
+cd ~/projects/recipe-box-local-deployment
+sudo docker compose build
+sudo docker compose up -d
+sudo docker compose ps
+sudo docker compose logs -f app recipe-resolver
 ```
 
-Open `http://localhost:3004`. On a remote server, test from the server with `curl -I http://127.0.0.1:3004`; the port is intentionally bound to loopback for reverse-proxy use.
-
-## 4. Nginx / Cloudflare Tunnel
-
-Reverse proxy your desired hostname to `http://127.0.0.1:3004`. Keep existing Lingo Store virtual hosts intact. For browser API requests, make sure the public Supabase URL is reachable over the hostname/IP that browsers use.
-
-## 5. Telegram webhook (optional)
-
-The webhook needs a publicly reachable HTTPS URL. Configure the bot webhook once your domain/tunnel route is active:
+For a local health check on the server:
 
 ```bash
-curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
-  -d "url=${APP_BASE_URL}/api/telegram" \
-  -d "secret_token=${TELEGRAM_WEBHOOK_SECRET}" \
+curl -I http://127.0.0.1:3004
+```
+
+Then open `http://192.168.1.254:3004` from a device on the same LAN (replace the IP if needed). The host port is intentionally bound to loopback for reverse-proxy use; direct LAN access requires changing that bind to `3004:3000` or going through Nginx.
+
+## 5. Nginx and Cloudflare Tunnel
+
+After LAN testing works, configure a new Nginx virtual host for the Recipe Box hostname and proxy it to `http://127.0.0.1:3004`. Add the hostname to your existing Cloudflare Tunnel without changing the Lingo Store host rules. Also expose the Supabase gateway via a separate secure hostname if the browser will reach the app remotely: the app needs its own public-facing `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_PUBLIC_URL` value. Do not expose the service-role key.
+
+## 6. Telegram webhook (optional)
+
+Telegram requires a publicly reachable HTTPS URL. Once the Recipe Box domain is configured, run this on the server after exporting the variables from `.env` or replacing the placeholders with the actual values:
+
+```bash
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook" \
+  -d "url=https://<your-recipes-host>/api/telegram" \
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>" \
   -d "drop_pending_updates=true" \
   -d 'allowed_updates=["message","channel_post"]'
 ```
 
-In the current Telegram handler, `ALLOWED_TELEGRAM_USER_ID` limits the bot to the owner when set.
+Set `ALLOWED_TELEGRAM_USER_ID` to the numeric Telegram user ID that is allowed to use the bot.
 
-## Updates and validation
+## Updates and diagnostics
 
 ```bash
 git pull origin local-deployment
-docker compose build --no-cache
-docker compose up -d
-docker compose logs --tail=200 app recipe-resolver
+sudo docker compose build --no-cache
+sudo docker compose up -d
+sudo docker compose logs --tail=200 app recipe-resolver
 ```
 
-The background helper now uses the persistent Node.js event loop instead of Vercel `waitUntil`. This is appropriate for long-lived Docker/systemd services, but in-flight background tasks can be interrupted by a process crash or restart. A durable external job runner would be a later hardening step.
+The Vercel Analytics, Speed Insights and `waitUntil` dependencies were removed. Background tasks now use the persistent Node.js event loop; these tasks may be interrupted if the process crashes or restarts. The queue is persisted in Supabase and can be reclaimed by a later worker, but this is not a full external durable-job runner.
 
-## Original project notes
-
-Recipe extraction is driven by Gemini. For non-YouTube social video links, the resolver uses yt-dlp and may need fresh Instagram cookies (Netscape format) in `RESOLVER_COOKIES`. Social platforms can change their access controls at any time, so self-hosting does not guarantee every private/blocked reel can be extracted.
-
-The rest of the application supports Arabic-normalized search, tags/collections, serving scaling, nutrition estimates, cook mode, notes/rating/favorites/cooked state, ingredient sections, print/copy, JSON backup export, dark mode, and installable PWA support.
+Social platforms can change access controls at any time. Instagram may need fresh Netscape-format cookies supplied in `RESOLVER_COOKIES`; self-hosting cannot guarantee private or blocked videos can be downloaded.
