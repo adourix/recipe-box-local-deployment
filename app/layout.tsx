@@ -1,13 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { Tajawal } from "next/font/google";
-import { Analytics } from "@vercel/analytics/next";
-import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { RegisterSW } from "./SW";
 import { ToastHost } from "./Toast";
 
 const themeInit = `(function(){try{var t=localStorage.getItem("theme");if(t==="dark"||(!t&&window.matchMedia&&matchMedia("(prefers-color-scheme:dark)").matches)){document.documentElement.setAttribute("data-theme","dark");}}catch(e){}})();`;
-const isVercel = process.env.VERCEL === "1";
 
 const tajawal = Tajawal({
   subsets: ["arabic"],
@@ -60,8 +57,6 @@ export default function RootLayout({
         {children}
         <ToastHost />
         <RegisterSW />
-        {isVercel && <Analytics />}
-        {isVercel && <SpeedInsights />}
       </body>
     </html>
   );
