@@ -1,0 +1,1 @@
+-- Schema and grants are installed from the migration.
