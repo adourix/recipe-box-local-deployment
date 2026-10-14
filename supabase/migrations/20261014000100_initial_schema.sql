@@ -48,12 +48,12 @@ create index if not exists jobs_status_created_idx on public.jobs (status, creat
 create index if not exists jobs_url_created_idx on public.jobs (url, created_at desc);
 
 create or replace function public.set_updated_at()
-returns trigger language plpgsql as $
+returns trigger language plpgsql as $fn$
 begin
   new.updated_at = now();
   return new;
 end;
-$;
+$fn$;
 
 drop trigger if exists jobs_set_updated_at on public.jobs;
 create trigger jobs_set_updated_at
