@@ -15,7 +15,7 @@ services:
       NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-http://localhost:8000}
       RESOLVER_URL: ${RESOLVER_URL:-http://recipe-resolver:8081}
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3004:3000"
     depends_on:
       recipe-resolver:
         condition: service_healthy
