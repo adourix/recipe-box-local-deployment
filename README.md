@@ -1,4 +1,4 @@
-# كتاب وصفات أمير — Recipe Box
+# كتاب وصفات عياد — Recipe Box
 
 Personal Arabic recipe manager. Share a social-media link, video, photo, or text with Telegram to extract and save recipes in Arabic, then browse/search the recipe gallery.
 
@@ -57,8 +57,6 @@ The bare-metal application installer expects:
 - OpenSSL
 - A working local Supabase API + Storage endpoint
 - PostgreSQL behind that Supabase layer
-
-The application itself listens only on loopback. Do not expose ports `3004` or `8081` directly to the Internet.
 
 ### Verify the server tools
 
