@@ -48,9 +48,12 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
                 return self._json(400, {"error": "unsupported URL"})
 
+            configured_cookie_file = os.environ.get("RESOLVER_COOKIES_FILE", "").strip()
             cookie_text = os.environ.get("RESOLVER_COOKIES", "").strip()
             opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True}
-            if cookie_text:
+            if configured_cookie_file:
+                opts["cookiefile"] = configured_cookie_file
+            elif cookie_text:
                 cookie_file = "/tmp/resolver-cookies.txt"
                 with open(cookie_file, "w", encoding="utf-8") as f:
                     f.write(cookie_text)
