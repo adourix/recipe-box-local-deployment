@@ -14,23 +14,23 @@ const tajawal = Tajawal({
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.APP_BASE_URL || "http://localhost:3004"),
-  title: "كتاب وصفات أمير",
+  title: "كتاب وصفات عياد",
   description: "وصفاتي المحفوظة من انستغرام وفيسبوك",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
-    title: "كتاب وصفات أمير",
+    title: "كتاب وصفات عياد",
     statusBarStyle: "default",
   },
   openGraph: {
-    title: "كتاب وصفات أمير",
+    title: "كتاب وصفات عياد",
     description: "وصفاتي المحفوظة من انستغرام وفيسبوك",
     type: "website",
     locale: "ar_AR",
   },
   twitter: {
     card: "summary_large_image",
-    title: "كتاب وصفات أمير",
+    title: "كتاب وصفات عياد",
     description: "وصفاتي المحفوظة من انستغرام وفيسبوك",
   },
 };
