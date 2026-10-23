@@ -1,5 +1,6 @@
 name: recipe-box
 
+# Legacy Docker path. Bare-metal deployment is the primary server path.
 services:
   app:
     build:
@@ -34,6 +35,8 @@ services:
     container_name: recipe-box-resolver
     restart: unless-stopped
     environment:
+      RESOLVER_HOST: "0.0.0.0"
+      RESOLVER_PORT: "8081"
       PORT: "8081"
       RESOLVER_SECRET: ${RESOLVER_SECRET:?Set RESOLVER_SECRET in .env}
       RESOLVER_COOKIES: ${RESOLVER_COOKIES:-}
