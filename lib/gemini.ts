@@ -120,6 +120,9 @@ async function callGemini(
           temperature: 0.2,
           responseMimeType: "application/json",
           responseSchema: RESPONSE_SCHEMA,
+          // Keep recipe JSON compact. A giant malformed response is more likely
+          // to break parsing and wastes Gemini quota without improving extraction.
+          maxOutputTokens: 4096,
         },
       }),
       // Transcribing a 3-minute reel routinely runs past a minute; a stingy
@@ -140,7 +143,31 @@ async function callGemini(
     const text: string | undefined =
       data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) return null;
-    return normalize(JSON.parse(stripFences(text)));
+    const parsed = parseGeminiJson(text);
+    if (parsed !== null) return normalize(parsed);
+
+    console.error("gemini invalid JSON", {
+      model,
+      chars: text.length,
+      tail: text.slice(-300),
+    });
+
+    // Gemini can occasionally violate the JSON contract even with a response schema.
+    // Retry the exact same multimodal request once with an explicit compact-JSON instruction.
+    if (attempt < 2) {
+      const retryParts = [
+        ...parts,
+        {
+          text: `
+
+إعادة المحاولة: أعد نفس نتيجة استخراج الوصفة لكن بصيغة JSON صالحة تمامًا.
+لا تضف أي شرح أو Markdown. لا تكرر النص أو التفريغ الصوتي. أعد فقط الحقول المطلوبة في المخطط،
+واجعل ingredients وsteps مختصرين ودقيقين بما يكفي للوصفة.`,
+        },
+      ];
+      return callGemini(retryParts, attempt + 1, model);
+    }
+    return null;
   } catch (e) {
     console.error("gemini call failed", e);
     return null;
@@ -402,6 +429,39 @@ export async function consolidateTags(tags: string[]): Promise<Record<string, st
   } catch (e) {
     console.error("consolidateTags failed", e);
     return {};
+  }
+}
+
+function parseGeminiJson(text: string): any | null {
+  const cleaned = stripFences(text);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Some responses contain a short preamble/trailing text despite the JSON contract.
+    // Extract the largest balanced JSON object while respecting quoted strings.
+    const start = cleaned.indexOf("{");
+    if (start < 0) return null;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) {
+          try { return JSON.parse(cleaned.slice(start, i + 1)); } catch { return null; }
+        }
+      }
+    }
+    return null;
   }
 }
 
