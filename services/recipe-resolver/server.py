@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
+import glob
 import html
 import json
+import mimetypes
 import os
 import re
+import shutil
+import tempfile
+import threading
+import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
@@ -21,6 +28,9 @@ ALLOWED_HOSTS = {
 }
 
 TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "vm.tiktok.com", "vt.tiktok.com"}
+MEDIA_TTL_SECONDS = 15 * 60
+MEDIA_DIR = os.path.join(tempfile.gettempdir(), "recipe-resolver-media")
+os.makedirs(MEDIA_DIR, exist_ok=True)
 
 
 def proxy_enabled():
@@ -163,8 +173,56 @@ def extract_tiktok_from_page(url, proxy):
     }
 
 
+def download_with_ytdlp(url, proxy, cookie_file=None):
+    """Download media locally so callers never have to re-request a signed CDN URL."""
+    job_dir = tempfile.mkdtemp(prefix="job-", dir=MEDIA_DIR)
+    output_template = os.path.join(job_dir, "media.%(ext)s")
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "outtmpl": output_template,
+        "restrictfilenames": True,
+        "merge_output_format": "mp4",
+    }
+    if proxy:
+        opts["proxy"] = proxy
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
+
+    try:
+        with YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+        candidates = [p for p in glob.glob(os.path.join(job_dir, "*") if os.path.isdir(job_dir) else "") if os.path.isfile(p)]
+        if not candidates:
+            raise RuntimeError("yt-dlp downloaded no media")
+        path = max(candidates, key=os.path.getsize)
+        token = uuid.uuid4().hex
+        final_dir = os.path.join(MEDIA_DIR, token)
+        os.rename(job_dir, final_dir)
+        filename = os.path.basename(path)
+        final_path = os.path.join(final_dir, filename)
+        size = os.path.getsize(final_path)
+        duration = info.get("duration")
+        return token, final_path, size, duration
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
+
+
+def cleanup_media():
+    now = time.time()
+    for path in glob.glob(os.path.join(MEDIA_DIR, "*")):
+        try:
+            if os.path.isdir(path) and now - os.path.getmtime(path) > MEDIA_TTL_SECONDS:
+                shutil.rmtree(path, ignore_errors=True)
+        except OSError:
+            pass
+    threading.Timer(60, cleanup_media).start()
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "RecipeResolver/1.0"
+    server_version = "RecipeResolver/1.1"
 
     def _json(self, status, payload):
         body = json.dumps(payload, ensure_ascii=False).encode()
@@ -178,6 +236,33 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
             return self._json(200, {"ok": True})
+
+        match = re.fullmatch(r"/media/([a-f0-9]{32})", self.path)
+        if match:
+            token = match.group(1)
+            media_dir = os.path.join(MEDIA_DIR, token)
+            if not os.path.isdir(media_dir):
+                return self._json(404, {"error": "media not found"})
+            files = [p for p in glob.glob(os.path.join(media_dir, "*") if os.path.isdir(media_dir) else "") if os.path.isfile(p)]
+            if not files:
+                return self._json(404, {"error": "media not found"})
+            path = files[0]
+            try:
+                size = os.path.getsize(path)
+                content_type = mimetypes.guess_type(path)[0] or "application/octet-stream"
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(size))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with open(path, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile, length=1024 * 1024)
+                return
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except OSError:
+                return self._json(404, {"error": "media unavailable"})
+
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -202,9 +287,14 @@ class Handler(BaseHTTPRequestHandler):
             if is_tiktok_url(url):
                 try:
                     result = extract_tiktok_from_page(url, proxy)
+                    token, _, media_size, duration = download_with_ytdlp(url, proxy)
+                    result["video_url"] = f"http://127.0.0.1:{os.environ.get('RESOLVER_PORT', '8081')}/media/{token}"
+                    result["video_filesize"] = media_size
+                    if duration:
+                        result["duration"] = duration
                     return self._json(200, result)
                 except Exception as tiktok_exc:
-                    self.log_error("TikTok page resolver failed: %s", tiktok_exc)
+                    self.log_error("TikTok page/download resolver failed: %s", tiktok_exc)
 
             configured_cookie_file = os.environ.get("RESOLVER_COOKIES_FILE", "").strip()
             cookie_text = os.environ.get("RESOLVER_COOKIES", "").strip()
@@ -269,6 +359,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     host = os.environ.get("RESOLVER_HOST", "127.0.0.1")
     port = int(os.environ.get("RESOLVER_PORT", os.environ.get("PORT", "8081")))
+    cleanup_media()
     server = ThreadingHTTPServer((host, port), Handler)
     print("recipe-resolver listening on %s:%s" % (host, port), flush=True)
     server.serve_forever()
