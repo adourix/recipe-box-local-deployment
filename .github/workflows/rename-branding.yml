@@ -1,0 +1,27 @@
+name: Update recipe book branding
+
+on:
+  push:
+    branches: [local-deployment]
+
+permissions:
+  contents: write
+
+jobs:
+  rename:
+    if: contains(github.event.head_commit.message, 'rename recipe book') == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rename branding
+        run: |
+          if grep -q 'كتاب وصفات أمير' app/GalleryClient.tsx; then
+            sed -i 's/كتاب وصفات أمير/كتاب وصفات عياد/g' app/GalleryClient.tsx
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add app/GalleryClient.tsx
+            git commit -m 'chore: rename recipe book branding'
+            git push
+          else
+            echo 'Branding already updated.'
+          fi
