@@ -193,7 +193,7 @@ def download_with_ytdlp(url, proxy, cookie_file=None):
     try:
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
-        candidates = [p for p in glob.glob(os.path.join(job_dir, "*") if os.path.isdir(job_dir) else "") if os.path.isfile(p)]
+        candidates = [p for p in glob.glob(os.path.join(job_dir, "*")) if os.path.isfile(p)]
         if not candidates:
             raise RuntimeError("yt-dlp downloaded no media")
         path = max(candidates, key=os.path.getsize)
@@ -218,7 +218,9 @@ def cleanup_media():
                 shutil.rmtree(path, ignore_errors=True)
         except OSError:
             pass
-    threading.Timer(60, cleanup_media).start()
+    timer = threading.Timer(60, cleanup_media)
+    timer.daemon = True
+    timer.start()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -243,7 +245,7 @@ class Handler(BaseHTTPRequestHandler):
             media_dir = os.path.join(MEDIA_DIR, token)
             if not os.path.isdir(media_dir):
                 return self._json(404, {"error": "media not found"})
-            files = [p for p in glob.glob(os.path.join(media_dir, "*") if os.path.isdir(media_dir) else "") if os.path.isfile(p)]
+            files = [p for p in glob.glob(os.path.join(media_dir, "*")) if os.path.isfile(p)]
             if not files:
                 return self._json(404, {"error": "media not found"})
             path = files[0]
