@@ -13,7 +13,7 @@ jobs:
     env:
       NEXT_TELEMETRY_DISABLED: "1"
       APP_BASE_URL: "http://localhost:3004"
-      INTERNAL_APP_URL: "http://127.0.0.1:3000"
+      INTERNAL_APP_URL: "http://127.0.0.1:3004"
       SUPABASE_URL: "http://localhost:8000"
       NEXT_PUBLIC_SUPABASE_URL: "http://localhost:8000"
       SUPABASE_PUBLIC_URL: "http://localhost:8000"
@@ -24,6 +24,8 @@ jobs:
       TELEGRAM_WEBHOOK_SECRET: "ci-placeholder"
       WORKER_SECRET: "ci-placeholder"
       RESOLVER_SECRET: "ci-placeholder"
+      RESOLVER_HOST: "127.0.0.1"
+      RESOLVER_PORT: "8081"
       GEMINI_API_KEY: ""
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +33,12 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - run: npm ci
       - run: npm run lint
       - run: npm test
       - run: npm run build
+      - run: python -m pip install -r services/recipe-resolver/requirements.txt
+      - run: python -m py_compile services/recipe-resolver/server.py
