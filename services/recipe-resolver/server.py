@@ -44,7 +44,6 @@ def is_tiktok_url(url):
 
 
 def first_value(obj, keys):
-    """Find the first non-empty value for any key in a nested JSON object."""
     if isinstance(obj, dict):
         for key in keys:
             value = obj.get(key)
@@ -62,24 +61,41 @@ def first_value(obj, keys):
     return None
 
 
-def first_dict_with_key(obj, key):
+def find_video_metadata(obj):
+    """Find a TikTok video metadata object regardless of current nesting."""
     if isinstance(obj, dict):
-        if key in obj and isinstance(obj[key], dict):
+        if any(isinstance(obj.get(k), str) and obj.get(k) for k in ("playAddr", "downloadAddr", "playApi")):
             return obj
         for value in obj.values():
-            found = first_dict_with_key(value, key)
+            found = find_video_metadata(value)
             if found:
                 return found
     elif isinstance(obj, list):
         for value in obj:
-            found = first_dict_with_key(value, key)
+            found = find_video_metadata(value)
+            if found:
+                return found
+    return None
+
+
+def find_item_struct(obj):
+    if isinstance(obj, dict):
+        item = obj.get("itemStruct")
+        if isinstance(item, dict):
+            return item
+        for value in obj.values():
+            found = find_item_struct(value)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = find_item_struct(value)
             if found:
                 return found
     return None
 
 
 def extract_tiktok_from_page(url, proxy):
-    """Resolve TikTok using the browser-like HTML response instead of yt-dlp's TikTok extractor."""
     if curl_requests is None:
         raise RuntimeError("curl_cffi is required for TikTok resolution")
 
@@ -104,10 +120,10 @@ def extract_tiktok_from_page(url, proxy):
     raw = html.unescape(match.group(1)).strip()
     data = json.loads(raw)
 
-    # Modern TikTok pages normally expose the video under itemStruct/video,
-    # but the recursive lookup keeps this compatible with small schema changes.
-    video_container = first_dict_with_key(data, "video")
-    video_data = video_container.get("video") if video_container else None
+    item = find_item_struct(data) or {}
+    video_data = item.get("video") if isinstance(item.get("video"), dict) else None
+    if not video_data:
+        video_data = find_video_metadata(data)
 
     if not isinstance(video_data, dict):
         raise RuntimeError("TikTok video metadata was not found")
@@ -117,16 +133,11 @@ def extract_tiktok_from_page(url, proxy):
         or video_data.get("downloadAddr")
         or video_data.get("playApi")
     )
-
     if isinstance(video_url, list):
         video_url = video_url[0] if video_url else None
-
-    if not video_url:
+    if not isinstance(video_url, str) or not video_url:
         raise RuntimeError("TikTok video URL was not found")
 
-    # Some responses provide the title/author in itemStruct; fall back to
-    # recursive lookup so the resolver remains tolerant of TikTok schema changes.
-    item = first_dict_with_key(data, "video") or {}
     title = item.get("desc") or first_value(data, {"desc"})
     author = item.get("author") if isinstance(item.get("author"), dict) else {}
     uploader = (
@@ -193,8 +204,7 @@ class Handler(BaseHTTPRequestHandler):
                     result = extract_tiktok_from_page(url, proxy)
                     return self._json(200, result)
                 except Exception as tiktok_exc:
-                    self.log_error("TikTok fallback failed: %s", tiktok_exc)
-                    # Continue to yt-dlp as a fallback for redirects/older pages.
+                    self.log_error("TikTok page resolver failed: %s", tiktok_exc)
 
             configured_cookie_file = os.environ.get("RESOLVER_COOKIES_FILE", "").strip()
             cookie_text = os.environ.get("RESOLVER_COOKIES", "").strip()
