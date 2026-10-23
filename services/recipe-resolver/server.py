@@ -14,6 +14,12 @@ ALLOWED_HOSTS = {
 }
 
 
+def proxy_enabled():
+    return os.environ.get("RESOLVER_PROXY_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "RecipeResolver/1.0"
 
@@ -51,6 +57,13 @@ class Handler(BaseHTTPRequestHandler):
             configured_cookie_file = os.environ.get("RESOLVER_COOKIES_FILE", "").strip()
             cookie_text = os.environ.get("RESOLVER_COOKIES", "").strip()
             opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True}
+
+            if proxy_enabled():
+                proxy = os.environ.get("RESOLVER_PROXY", "").strip()
+                if not proxy:
+                    return self._json(500, {"error": "resolver proxy is enabled but not configured"})
+                opts["proxy"] = proxy
+
             if configured_cookie_file:
                 opts["cookiefile"] = configured_cookie_file
             elif cookie_text:
