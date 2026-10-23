@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   const m: Record<string, unknown> = {
-    name: "كتاب وصفات أمير",
-    short_name: "وصفات أمير",
+    name: "كتاب وصفات عياد",
+    short_name: "وصفات عياد",
     description: "معرض وصفاتي من انستغرام وفيسبوك",
     lang: "ar",
     dir: "rtl",
