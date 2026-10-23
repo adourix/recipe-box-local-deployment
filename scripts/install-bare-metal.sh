@@ -2,10 +2,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-APP_USER="${APP_USER:-${SUDO_USER:-$(id -un)}}"
-
-if [[ "$(id -u)" -eq 0 && -z "${SUDO_USER:-}" && -z "${APP_USER:-}" ]]; then
-  echo "Run this script as the deployment user or with sudo from that user." >&2
+if [[ -n "${APP_USER:-}" ]]; then
+  :
+elif [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+  APP_USER="$SUDO_USER"
+elif [[ "$(id -u)" -ne 0 ]]; then
+  APP_USER="$(id -un)"
+else
+  echo "Set APP_USER to the non-root deployment user when running this script as root." >&2
   exit 1
 fi
 
@@ -60,6 +64,24 @@ fi
 
 # Generate application secrets without replacing existing values.
 run_as_app bash -lc "cd '$ROOT' && bash scripts/generate-local-keys.sh"
+
+get_env() {
+  local key="$1"
+  grep -E "^${key}=" "$ROOT/.env" | tail -n 1 | cut -d= -f2-
+}
+
+require_env() {
+  local key="$1" value
+  value="$(get_env "$key")"
+  if [[ -z "$value" || "$value" == replace-* ]]; then
+    echo "Missing real value for $key in $ROOT/.env" >&2
+    exit 1
+  fi
+}
+
+for key in SUPABASE_URL SUPABASE_PUBLIC_URL SUPABASE_SERVICE_ROLE_KEY NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY GEMINI_API_KEY RESOLVER_SECRET EDIT_KEY CRON_SECRET; do
+  require_env "$key"
+done
 
 # Install Python dependencies into a project-local venv.
 run_as_app "$PYTHON_BIN" -m venv "$ROOT/services/recipe-resolver/.venv"
