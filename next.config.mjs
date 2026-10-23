@@ -1,15 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Keep a self-contained production build for direct Node.js execution.
   output: "standalone",
   images: {
-    // ponytail: Vercel's free image-transformation quota ran out. Images already
-    // live sized in Supabase Storage, so serve them straight.
-    // Upgrade path: downscale once on upload in persistImage() if bandwidth bites.
+    // Recipe images are already served by Supabase Storage.
     unoptimized: true,
-    remotePatterns: [
-      { protocol: "https", hostname: "uqvocwyzuepkwcynqluu.supabase.co" },
-    ],
   },
 };
 
