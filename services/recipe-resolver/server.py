@@ -13,6 +13,7 @@ ALLOWED_HOSTS = {
     "youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com",
 }
 
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "RecipeResolver/1.0"
 
@@ -36,6 +37,7 @@ class Handler(BaseHTTPRequestHandler):
         secret = os.environ.get("RESOLVER_SECRET", "")
         if not secret or self.headers.get("x-internal-secret") != secret:
             return self._json(401, {"error": "unauthorized"})
+        cookie_file = None
         try:
             size = int(self.headers.get("Content-Length", "0"))
             if size <= 0 or size > 65536:
@@ -45,7 +47,7 @@ class Handler(BaseHTTPRequestHandler):
             parsed = urlparse(url)
             if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
                 return self._json(400, {"error": "unsupported URL"})
-            cookie_file = None
+
             cookie_text = os.environ.get("RESOLVER_COOKIES", "").strip()
             opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True}
             if cookie_text:
@@ -53,17 +55,32 @@ class Handler(BaseHTTPRequestHandler):
                 with open(cookie_file, "w", encoding="utf-8") as f:
                     f.write(cookie_text)
                 opts["cookiefile"] = cookie_file
+
             with YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
+
             formats = info.get("formats", [])
-            videos = [f for f in formats if f.get("url") and f.get("vcodec") != "none" and f.get("height")]
-            videos.sort(key=lambda f: (f.get("height") or 0, f.get("filesize") or f.get("filesize_approx") or 0))
-            audios = [f for f in formats if f.get("url") and f.get("acodec") != "none" and f.get("vcodec") == "none"]
+            videos = [
+                f for f in formats
+                if f.get("url") and f.get("vcodec") != "none" and f.get("height")
+            ]
+            videos.sort(
+                key=lambda f: (
+                    f.get("height") or 0,
+                    f.get("filesize") or f.get("filesize_approx") or 0,
+                )
+            )
+            audios = [
+                f for f in formats
+                if f.get("url") and f.get("acodec") != "none" and f.get("vcodec") == "none"
+            ]
             audio = audios[-1] if audios else None
             video = videos[-1] if videos else None
             result = {
                 "video_url": video.get("url") if video else None,
-                "video_filesize": (video.get("filesize") or video.get("filesize_approx")) if video else None,
+                "video_filesize": (
+                    video.get("filesize") or video.get("filesize_approx")
+                ) if video else None,
                 "audio_url": audio.get("url") if audio else None,
                 "title": info.get("title"),
                 "duration": info.get("duration"),
@@ -77,16 +94,20 @@ class Handler(BaseHTTPRequestHandler):
             self.log_error("resolve failure: %s", exc)
             return self._json(422, {"error": "resolve failed"})
         finally:
-            if "cookie_file" in locals() and cookie_file and os.path.exists(cookie_file):
+            if cookie_file and os.path.exists(cookie_file):
                 os.remove(cookie_file)
 
     def log_message(self, fmt, *args):
         print("%s - %s" % (self.address_string(), fmt % args), flush=True)
 
+
 def main():
-    server = ThreadingHTTPServer(("0.0.0.0", int(os.environ.get("PORT", "8081"))), Handler)
-    print("recipe-resolver listening on 0.0.0.0:%s" % server.server_port, flush=True)
+    host = os.environ.get("RESOLVER_HOST", "127.0.0.1")
+    port = int(os.environ.get("RESOLVER_PORT", os.environ.get("PORT", "8081")))
+    server = ThreadingHTTPServer((host, port), Handler)
+    print("recipe-resolver listening on %s:%s" % (host, port), flush=True)
     server.serve_forever()
+
 
 if __name__ == "__main__":
     main()
