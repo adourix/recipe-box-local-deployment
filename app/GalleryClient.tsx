@@ -264,7 +264,7 @@ export default function GalleryClient({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.svg" alt="" className="brand-logo" width={40} height={40} />
           <div>
-            <h1>كتاب وصفات أمير</h1>
+            <h1>كتاب وصفات عياد</h1>
             <span className="count">{recipes.length} وصفة</span>
           </div>
         </div>
