@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
+import html
 import json
 import os
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from yt_dlp import YoutubeDL
+
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:
+    curl_requests = None
 
 ALLOWED_HOSTS = {
     "instagram.com", "www.instagram.com", "m.instagram.com",
@@ -13,10 +20,135 @@ ALLOWED_HOSTS = {
     "youtube.com", "www.youtube.com", "youtu.be", "m.youtube.com",
 }
 
+TIKTOK_HOSTS = {"tiktok.com", "www.tiktok.com", "vm.tiktok.com", "vt.tiktok.com"}
+
 
 def proxy_enabled():
     return os.environ.get("RESOLVER_PROXY_ENABLED", "false").strip().lower() in {
         "1", "true", "yes", "on"
+    }
+
+
+def configured_proxy():
+    if not proxy_enabled():
+        return None
+    proxy = os.environ.get("RESOLVER_PROXY", "").strip()
+    if not proxy:
+        raise RuntimeError("resolver proxy is enabled but not configured")
+    return proxy
+
+
+def is_tiktok_url(url):
+    hostname = (urlparse(url).hostname or "").lower().rstrip(".")
+    return hostname in TIKTOK_HOSTS
+
+
+def first_value(obj, keys):
+    """Find the first non-empty value for any key in a nested JSON object."""
+    if isinstance(obj, dict):
+        for key in keys:
+            value = obj.get(key)
+            if isinstance(value, str) and value:
+                return value
+        for value in obj.values():
+            found = first_value(value, keys)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = first_value(value, keys)
+            if found:
+                return found
+    return None
+
+
+def first_dict_with_key(obj, key):
+    if isinstance(obj, dict):
+        if key in obj and isinstance(obj[key], dict):
+            return obj
+        for value in obj.values():
+            found = first_dict_with_key(value, key)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = first_dict_with_key(value, key)
+            if found:
+                return found
+    return None
+
+
+def extract_tiktok_from_page(url, proxy):
+    """Resolve TikTok using the browser-like HTML response instead of yt-dlp's TikTok extractor."""
+    if curl_requests is None:
+        raise RuntimeError("curl_cffi is required for TikTok resolution")
+
+    response = curl_requests.get(
+        url,
+        proxy=proxy,
+        impersonate="chrome",
+        timeout=30,
+        allow_redirects=True,
+    )
+    response.raise_for_status()
+    page = response.text
+
+    match = re.search(
+        r'<script[^>]+id=["\']__UNIVERSAL_DATA_FOR_REHYDRATION__["\'][^>]*>(.*?)</script>',
+        page,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if not match:
+        raise RuntimeError("TikTok universal data was not found")
+
+    raw = html.unescape(match.group(1)).strip()
+    data = json.loads(raw)
+
+    # Modern TikTok pages normally expose the video under itemStruct/video,
+    # but the recursive lookup keeps this compatible with small schema changes.
+    video_container = first_dict_with_key(data, "video")
+    video_data = video_container.get("video") if video_container else None
+
+    if not isinstance(video_data, dict):
+        raise RuntimeError("TikTok video metadata was not found")
+
+    video_url = (
+        video_data.get("playAddr")
+        or video_data.get("downloadAddr")
+        or video_data.get("playApi")
+    )
+
+    if isinstance(video_url, list):
+        video_url = video_url[0] if video_url else None
+
+    if not video_url:
+        raise RuntimeError("TikTok video URL was not found")
+
+    # Some responses provide the title/author in itemStruct; fall back to
+    # recursive lookup so the resolver remains tolerant of TikTok schema changes.
+    item = first_dict_with_key(data, "video") or {}
+    title = item.get("desc") or first_value(data, {"desc"})
+    author = item.get("author") if isinstance(item.get("author"), dict) else {}
+    uploader = (
+        author.get("uniqueId")
+        or author.get("nickname")
+        or first_value(data, {"uniqueId", "nickname"})
+    )
+    duration = video_data.get("duration")
+    thumbnail = (
+        video_data.get("cover")
+        or video_data.get("originCover")
+        or video_data.get("dynamicCover")
+    )
+
+    return {
+        "video_url": video_url,
+        "video_filesize": None,
+        "audio_url": None,
+        "title": title,
+        "duration": duration,
+        "uploader": uploader,
+        "thumbnail": thumbnail,
     }
 
 
@@ -54,14 +186,21 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
                 return self._json(400, {"error": "unsupported URL"})
 
+            proxy = configured_proxy()
+
+            if is_tiktok_url(url):
+                try:
+                    result = extract_tiktok_from_page(url, proxy)
+                    return self._json(200, result)
+                except Exception as tiktok_exc:
+                    self.log_error("TikTok fallback failed: %s", tiktok_exc)
+                    # Continue to yt-dlp as a fallback for redirects/older pages.
+
             configured_cookie_file = os.environ.get("RESOLVER_COOKIES_FILE", "").strip()
             cookie_text = os.environ.get("RESOLVER_COOKIES", "").strip()
             opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "skip_download": True}
 
-            if proxy_enabled():
-                proxy = os.environ.get("RESOLVER_PROXY", "").strip()
-                if not proxy:
-                    return self._json(500, {"error": "resolver proxy is enabled but not configured"})
+            if proxy:
                 opts["proxy"] = proxy
 
             if configured_cookie_file:
