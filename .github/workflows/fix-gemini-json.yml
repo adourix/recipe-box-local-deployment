@@ -1,0 +1,61 @@
+name: Fix Gemini JSON parsing
+
+on:
+  push:
+    paths:
+      - .github/workflows/fix-gemini-json.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: local-deployment
+          fetch-depth: 0
+
+      - name: Patch Gemini parser
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/gemini.ts')
+          s = path.read_text()
+
+          old_cfg = '''          temperature: 0.2,\n          responseMimeType: "application/json",\n          responseSchema: RESPONSE_SCHEMA,'''
+          new_cfg = '''          temperature: 0.2,\n          responseMimeType: "application/json",\n          responseSchema: RESPONSE_SCHEMA,\n          // Keep recipe JSON compact. A giant malformed response is more likely\n          // to break parsing and wastes Gemini quota without improving extraction.\n          maxOutputTokens: 4096,'''
+          if old_cfg in s and 'maxOutputTokens: 4096' not in s:
+              s = s.replace(old_cfg, new_cfg, 1)
+
+          old_parse = '''    return normalize(JSON.parse(stripFences(text)));'''
+          new_parse = '''    const parsed = parseGeminiJson(text);\n    if (parsed !== null) return normalize(parsed);\n\n    console.error("gemini invalid JSON", {\n      model,\n      chars: text.length,\n      tail: text.slice(-300),\n    });\n\n    // Gemini can occasionally violate the JSON contract even with a response schema.\n    // Retry the exact same multimodal request once with an explicit compact-JSON instruction.\n    if (attempt < 2) {\n      const retryParts = [\n        ...parts,\n        {\n          text: `\n\nإعادة المحاولة: أعد نفس نتيجة استخراج الوصفة لكن بصيغة JSON صالحة تمامًا.\nلا تضف أي شرح أو Markdown. لا تكرر النص أو التفريغ الصوتي. أعد فقط الحقول المطلوبة في المخطط،\nواجعل ingredients وsteps مختصرين ودقيقين بما يكفي للوصفة.`,\n        },\n      ];\n      return callGemini(retryParts, attempt + 1, model);\n    }\n    return null;'''
+          if old_parse in s and 'gemini invalid JSON' not in s:
+              s = s.replace(old_parse, new_parse, 1)
+
+          marker = '''function stripFences(s: string): string {'''
+          helper = '''function parseGeminiJson(text: string): any | null {\n  const cleaned = stripFences(text);\n  try {\n    return JSON.parse(cleaned);\n  } catch {\n    // Some responses contain a short preamble/trailing text despite the JSON contract.\n    // Extract the largest balanced JSON object while respecting quoted strings.\n    const start = cleaned.indexOf("{");\n    if (start < 0) return null;\n    let depth = 0;\n    let inString = false;\n    let escaped = false;\n    for (let i = start; i < cleaned.length; i++) {\n      const ch = cleaned[i];\n      if (inString) {\n        if (escaped) escaped = false;\n        else if (ch === "\\\\") escaped = true;\n        else if (ch === '"') inString = false;\n        continue;\n      }\n      if (ch === '"') { inString = true; continue; }\n      if (ch === "{") depth++;\n      else if (ch === "}") {\n        depth--;\n        if (depth === 0) {\n          try { return JSON.parse(cleaned.slice(start, i + 1)); } catch { return null; }\n        }\n      }\n    }\n    return null;\n  }\n}\n\n'''
+          if 'function parseGeminiJson(' not in s:
+              s = s.replace(marker, helper + marker, 1)
+
+          path.write_text(s)
+          PY
+
+      - name: Typecheck
+        run: |
+          npm ci
+          npm run lint
+
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/gemini.ts
+          if git diff --cached --quiet; then
+            echo "No changes needed"
+            exit 0
+          fi
+          git commit -m "fix: harden Gemini recipe JSON parsing"
+          git push origin HEAD:local-deployment
