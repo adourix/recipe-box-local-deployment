@@ -14,7 +14,7 @@ Environment=NODE_ENV=production
 Environment=HOSTNAME=127.0.0.1
 Environment=PORT=3004
 Environment=NEXT_TELEMETRY_DISABLED=1
-ExecStart=/usr/bin/npm start -- -p 3004
+ExecStart=__NPM_BIN__ start -- -p 3004
 Restart=always
 RestartSec=5
 TimeoutStopSec=20
