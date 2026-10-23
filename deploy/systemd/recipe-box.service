@@ -1,0 +1,26 @@
+[Unit]
+Description=Recipe Box Next.js application
+After=network-online.target postgresql.service recipe-resolver.service
+Wants=network-online.target
+Requires=recipe-resolver.service
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=__APP_DIR__/.env
+Environment=NODE_ENV=production
+Environment=HOSTNAME=127.0.0.1
+Environment=PORT=3004
+Environment=NEXT_TELEMETRY_DISABLED=1
+ExecStart=/usr/bin/npm start -- -p 3004
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
