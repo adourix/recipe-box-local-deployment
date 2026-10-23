@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   }
 
-  // 3) Commands / help.
+  // 3) Commands / help (Ayad branding).
   if (text.startsWith("/start") || text.startsWith("/help")) {
     await sendMessage(
       chatId,
